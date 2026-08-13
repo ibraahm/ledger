@@ -193,14 +193,6 @@
               <input class="settings__input" id="taskDueTime" type="time" />
             </div>
             <div>
-              <label class="settings__label" for="taskPriority">Priority</label>
-              <select class="settings__input" id="taskPriority">
-                <option value="low">Low</option>
-                <option value="normal">Normal</option>
-                <option value="high">High</option>
-              </select>
-            </div>
-            <div>
               <label class="settings__label" for="taskGoalArea">Goal Area</label>
               <select class="settings__input" id="taskGoalArea"></select>
             </div>
@@ -208,23 +200,39 @@
               <label class="settings__label" for="taskType">Task type</label>
               <select class="settings__input" id="taskType"></select>
             </div>
-            <div>
-              <label class="settings__label" for="taskOwner">Owner</label>
-              <input class="settings__input" id="taskOwner" type="text" value="me" />
-            </div>
           </div>
           <p class="task-editor__type-help" id="taskTypeHelp">Choose the one framework that matches the work.</p>
-          <section class="task-framework" aria-labelledby="taskFrameworkTitle">
-            <div class="task-editor__section-head">
-              <div>
-                <h3 id="taskFrameworkTitle">Structured task brief</h3>
-                <p>Shared fields plus details for this task type. Sensitive values stay encrypted.</p>
+          <div class="task-framework__operational" id="taskOperationalFields"></div>
+          <details class="task-editor__advanced" id="taskAdvancedDetails">
+            <summary>More details</summary>
+            <div class="task-editor__advanced-body">
+              <div class="task-editor__fields">
+                <div>
+                  <label class="settings__label" for="taskPriority">Priority</label>
+                  <select class="settings__input" id="taskPriority">
+                    <option value="low">Low</option>
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="settings__label" for="taskOwner">Owner</label>
+                  <input class="settings__input" id="taskOwner" type="text" value="me" />
+                </div>
               </div>
+              <section class="task-framework" aria-labelledby="taskFrameworkTitle">
+                <div class="task-editor__section-head">
+                  <div>
+                    <h3 id="taskFrameworkTitle">Structured task brief</h3>
+                    <p>Contact, planning, outcome, and type-specific details. Sensitive values stay encrypted.</p>
+                  </div>
+                </div>
+                <div class="task-framework__fields" id="taskFrameworkFields"></div>
+              </section>
+              <label class="settings__label" for="taskDetail">Additional context</label>
+              <textarea class="settings__input task-editor__detail" id="taskDetail" rows="3"></textarea>
             </div>
-            <div class="task-framework__fields" id="taskFrameworkFields"></div>
-          </section>
-          <label class="settings__label" for="taskDetail">Additional context</label>
-          <textarea class="settings__input task-editor__detail" id="taskDetail" rows="3"></textarea>
+          </details>
           <p class="settings__error" id="taskEditorError" role="alert"></p>
           <div class="task-editor__save-row">
             <span class="settings__hint" id="taskSourceSummary"></span>

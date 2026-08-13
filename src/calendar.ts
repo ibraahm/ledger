@@ -1,5 +1,6 @@
 import type { CalEvent, Commitment } from "./store.js";
 import { config } from "./config.js";
+import { zonedDateTimeToUtc } from "./time.js";
 
 function escapeIcs(value: string): string {
   return value
@@ -37,7 +38,13 @@ function foldLine(line: string): string[] {
 }
 
 function eventLines(event: CalEvent, stamp: string): string[] {
-  const lines = ["BEGIN:VEVENT", `UID:event-${event.id}@ledger.local`, `DTSTAMP:${stamp}`];
+  const lines = [
+    "BEGIN:VEVENT",
+    `UID:event-${event.id}@ledger.local`,
+    `DTSTAMP:${stamp}`,
+    `LAST-MODIFIED:${event.updatedAt ? compactUtc(event.updatedAt) : stamp}`,
+    `SEQUENCE:${Math.max(0, Number(event.revision || 0))}`,
+  ];
   if (event.allDay) {
     const start = event.startsAt.slice(0, 10);
     const end = event.endsAt?.slice(0, 10) || nextDate(start);
@@ -60,20 +67,30 @@ function commitmentLines(commitment: Commitment, stamp: string): string[] {
     commitment.detail,
     commitment.entityName ? `Related to: ${commitment.entityName}` : "",
     commitment.waitingOn ? `Waiting on: ${commitment.waitingOn}` : commitment.direction === "theirs" ? "Waiting on someone else" : "Open Ledger commitment",
+    commitment.nextAction ? `Next action: ${commitment.nextAction}` : "",
   ].filter(Boolean).join("\n");
-  return [
+  const lines = [
     "BEGIN:VEVENT",
     `UID:commitment-${commitment.id}@ledger.local`,
     `DTSTAMP:${stamp}`,
-    `DTSTART;VALUE=DATE:${compactDate(due)}`,
-    `DTEND;VALUE=DATE:${compactDate(nextDate(due))}`,
+    `LAST-MODIFIED:${commitment.updatedAt ? compactUtc(commitment.updatedAt) : stamp}`,
+    `SEQUENCE:${Math.max(0, Number(commitment.revision || 0))}`,
+  ];
+  if (commitment.dueTime) {
+    lines.push(`DTSTART:${compactUtc(zonedDateTimeToUtc(`${due}T${commitment.dueTime}`, config.timezone))}`);
+  } else {
+    lines.push(`DTSTART;VALUE=DATE:${compactDate(due)}`);
+    lines.push(`DTEND;VALUE=DATE:${compactDate(nextDate(due))}`);
+  }
+  lines.push(
     `SUMMARY:${escapeIcs(commitment.title)}`,
     `DESCRIPTION:${escapeIcs(description)}`,
     "CATEGORIES:Ledger Commitment",
     "TRANSP:TRANSPARENT",
     "STATUS:CONFIRMED",
     "END:VEVENT",
-  ];
+  );
+  return lines;
 }
 
 export function buildCalendarIcs(events: CalEvent[], commitments: Commitment[]): string {

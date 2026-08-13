@@ -406,6 +406,8 @@ export interface Commitment {
   entityName: string | null;
   entryId: number | null;
   createdAt: string;
+  updatedAt: string;
+  revision: number;
   completedAt: string | null;
   items: CommitmentItem[];
   duplicate?: boolean;
@@ -494,6 +496,8 @@ function toCommitment(row: any): Commitment {
     entityName: row.entity_name || null,
     entryId: row.entry_id ? Number(row.entry_id) : null,
     createdAt,
+    updatedAt: isoStamp(row.updated_at || row.created_at),
+    revision: Number(row.revision || 0),
     completedAt,
     items: row.items || [],
   };
@@ -613,7 +617,9 @@ export async function addCommitment(input: {
          goal_area = $9,
          due_time = $10,
          owner = $11,
-         framework_enc = $12
+         framework_enc = $12,
+         updated_at = now(),
+         revision = revision + 1
        WHERE id = $1 RETURNING *`,
       [
         existing.id,
@@ -678,7 +684,7 @@ export async function closeCommitment(query: string): Promise<Commitment | null>
   );
   if (!rows[0]) return null;
   const { rows: updated } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now() WHERE id = $1 RETURNING *`,
+    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
     [rows[0].id],
   );
   return toCommitment({ ...updated[0], entity_name: rows[0].entity_name });
@@ -687,7 +693,7 @@ export async function closeCommitment(query: string): Promise<Commitment | null>
 export async function closeCommitmentById(id: number): Promise<Commitment | null> {
   const db = await getDb();
   const { rows } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now()
+    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1
      WHERE id = $1 AND status = 'open' RETURNING *`,
     [id],
   );
@@ -752,7 +758,8 @@ export async function updateCommitmentById(
   const framework = mergedTaskFramework(taskType, current.framework, changes.framework);
   const { rows } = await db.query(
     `UPDATE commitments SET title = $2, detail_enc = $3, due_on = $4, priority = $5, direction = $6, task_type = $7,
-       goal_area = $8, due_time = $9, owner = $10, framework_enc = $11
+       goal_area = $8, due_time = $9, owner = $10, framework_enc = $11,
+       updated_at = now(), revision = revision + 1
      WHERE id = $1 AND status = 'open' RETURNING *`,
     [id, changes.title.replace(/\s+/g, " ").trim(), changes.detail ? encrypt(changes.detail) : null,
       changes.dueOn || null, changes.priority, direction, taskType, normalizeGoalArea(changes.goalArea || current.goalArea),
@@ -834,7 +841,8 @@ export async function mergeCommitments(ids: number[], title?: string): Promise<C
     const survivor = rows[0];
     const parentTitle = title?.trim() || workstreamTitle(commitmentWorkstreamKey(rows.map((row) => row.title).join(" ")) || "complete|workstream", survivor.title);
     await db.query(
-      `UPDATE commitments SET title = $2, due_on = $3, priority = $4, entity_id = NULL WHERE id = $1`,
+      `UPDATE commitments SET title = $2, due_on = $3, priority = $4, entity_id = NULL,
+         updated_at = now(), revision = revision + 1 WHERE id = $1`,
       [survivor.id, parentTitle, earliestDate(...rows.map((row) => isoDate(row.due_on))), strongestPriority(...rows.map((row) => row.priority))],
     );
     await upsertCommitmentItems(Number(survivor.id), rows.map((row) => ({
@@ -849,7 +857,7 @@ export async function mergeCommitments(ids: number[], title?: string): Promise<C
         dueOn: isoDate(child.due_on) || undefined, entityId: child.entity_id ? Number(child.entity_id) : null,
         entryId: child.entry_id ? Number(child.entry_id) : null,
       })));
-      await db.query(`UPDATE commitments SET status = 'archived', closed_at = now() WHERE id = $1`, [row.id]);
+      await db.query(`UPDATE commitments SET status = 'archived', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1`, [row.id]);
     }
     return commitmentDetail(Number(survivor.id));
   });
@@ -907,7 +915,7 @@ export async function updateCommitment(
   const { rows: updated } = await db.query(
     `UPDATE commitments SET title = $2, detail_enc = $3, due_on = $4, priority = $5,
        direction = $6, entity_id = $7, task_type = $8, goal_area = $9, due_time = $10,
-       owner = $11, framework_enc = $12 WHERE id = $1 RETURNING *`,
+       owner = $11, framework_enc = $12, updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
     [
       current.id,
       changes.title?.replace(/\s+/g, " ").trim() || current.title,
@@ -940,7 +948,7 @@ export async function completeCommitment(query: string): Promise<RecordMutation<
   const matches = matchingRows(rows, query, commitmentTitleKey);
   if (matches.length !== 1) return { item: null, matches: matches.slice(0, 6).map((row) => row.title) };
   const { rows: updated } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now() WHERE id = $1 RETURNING *`,
+    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
     [matches[0].id],
   );
   return { item: toCommitment({ ...updated[0], entity_name: matches[0].entity_name }), matches: [] };
@@ -1226,7 +1234,8 @@ export async function consolidateDuplicates(): Promise<ConsolidationResult> {
       : details.sort((a, b) => b.length - a.length)[0] || "";
     const entityIds = [...new Set(group.map((row) => (row.entity_id ? Number(row.entity_id) : null)).filter(Boolean))];
     await db.query(
-      `UPDATE commitments SET title = $2, detail_enc = COALESCE($3, detail_enc), due_on = $4, priority = $5, entity_id = $6
+      `UPDATE commitments SET title = $2, detail_enc = COALESCE($3, detail_enc), due_on = $4, priority = $5, entity_id = $6,
+         updated_at = now(), revision = revision + 1
        WHERE id = $1`,
       [
         survivor.id,
@@ -1249,7 +1258,7 @@ export async function consolidateDuplicates(): Promise<ConsolidationResult> {
       })));
     }
     for (const duplicate of group.slice(1)) {
-      await db.query(`UPDATE commitments SET status = 'archived', closed_at = now() WHERE id = $1`, [duplicate.id]);
+      await db.query(`UPDATE commitments SET status = 'archived', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1`, [duplicate.id]);
       commitmentsArchived += 1;
     }
   }
@@ -1267,6 +1276,8 @@ export interface CalEvent {
   allDay: boolean;
   location: string | null;
   entityName: string | null;
+  updatedAt: string;
+  revision: number;
 }
 
 function toEvent(row: any): CalEvent {
@@ -1285,6 +1296,8 @@ function toEvent(row: any): CalEvent {
     allDay: row.all_day,
     location: row.location,
     entityName: row.entity_name || null,
+    updatedAt: isoStamp(row.updated_at || row.created_at),
+    revision: Number(row.revision || 0),
   };
 }
 
@@ -1385,7 +1398,8 @@ export async function updateEvent(
     : current.ends_at;
   const { rows: updated } = await db.query(
     `UPDATE events SET title = $2, starts_at = $3, ends_at = $4, all_day = $5,
-       location = $6, detail_enc = $7, entity_id = $8, time_basis = $9 WHERE id = $1 RETURNING *`,
+       location = $6, detail_enc = $7, entity_id = $8, time_basis = $9,
+       updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
     [
       current.id,
       changes.title?.replace(/\s+/g, " ").trim() || current.title,
@@ -1611,9 +1625,8 @@ export async function searchMemory(query: string, limit = 50): Promise<MemoryHit
     db.query(
       `SELECT c.*, e.name AS entity_name FROM commitments c
        LEFT JOIN entities e ON e.id = c.entity_id
-       WHERE ($1 = '' OR lower(c.title) LIKE lower($2))
-       ORDER BY c.created_at DESC LIMIT $3`,
-      [term, like, perKind],
+       ORDER BY c.created_at DESC LIMIT $1`,
+      [term ? 500 : perKind],
     ),
     db.query(
       `SELECT g.*, e.name AS entity_name FROM goals g
@@ -1643,6 +1656,53 @@ export async function searchMemory(query: string, limit = 50): Promise<MemoryHit
         ),
   ]);
 
+  const searchValue = (value: unknown): string => Array.isArray(value)
+    ? value.map(searchValue).join(" ")
+    : value && typeof value === "object"
+      ? Object.values(value as Record<string, unknown>).map(searchValue).join(" ")
+      : String(value || "");
+  const taskHits = commitments.rows
+    .map((row: any) => {
+      const task = toCommitment(row);
+      const selectedFramework = {
+        contact: task.framework.contact,
+        waiting_on: task.framework.waiting_on,
+        next_action: task.framework.next_action,
+        result: task.framework.result,
+        recap: task.framework.recap,
+        call_recap: task.framework.call_recap,
+        meeting_recap: task.framework.meeting_recap,
+        response_recap: task.framework.response_recap,
+        findings: task.framework.findings,
+        decision: task.framework.decision,
+        recommendation: task.framework.recommendation,
+        key_points: task.framework.key_points,
+        action_items: task.framework.action_items,
+      };
+      const searchable = searchValue([
+        task.title, task.detail, task.entityName, task.goalArea, task.taskType, task.owner, selectedFramework,
+      ]).toLocaleLowerCase();
+      const body = [
+        task.detail,
+        task.waitingOn ? `Waiting on: ${task.waitingOn}` : "",
+        task.nextAction ? `Next action: ${task.nextAction}` : "",
+        task.framework.result ? `Result: ${searchValue(task.framework.result)}` : "",
+        task.framework.recap ? `Recap: ${searchValue(task.framework.recap)}` : "",
+      ].filter(Boolean).join("\n");
+      return {
+        kind: "task" as const,
+        id: task.id,
+        title: task.title,
+        body,
+        context: [task.goalArea, task.taskType, task.status, task.entityName, task.dueOn].filter(Boolean).join(" / "),
+        createdAt: task.createdAt,
+        searchable,
+      };
+    })
+    .filter((hit) => !term || hit.searchable.includes(term.toLocaleLowerCase()))
+    .slice(0, perKind)
+    .map(({ searchable: _searchable, ...hit }) => hit);
+
   const hits: MemoryHit[] = [
     ...entities.rows.map((row: any) => ({
       kind: "entity" as const,
@@ -1652,14 +1712,7 @@ export async function searchMemory(query: string, limit = 50): Promise<MemoryHit
       context: [row.kind, row.country, row.status].filter(Boolean).join(" / "),
       createdAt: isoStamp(row.updated_at),
     })),
-    ...commitments.rows.map((row: any) => ({
-      kind: "task" as const,
-      id: Number(row.id),
-      title: row.title,
-      body: row.detail_enc ? decrypt(row.detail_enc) : "",
-      context: [row.direction === "theirs" ? "Waiting on" : "Task", row.entity_name, isoDate(row.due_on)].filter(Boolean).join(" / "),
-      createdAt: isoStamp(row.created_at),
-    })),
+    ...taskHits,
     ...goals.rows.map((row: any) => ({
       kind: "goal" as const,
       id: Number(row.id),

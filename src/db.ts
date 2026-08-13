@@ -286,6 +286,15 @@ END;
 CREATE INDEX IF NOT EXISTS commitments_goal_area ON commitments (status, goal_area, due_on);
 CREATE INDEX IF NOT EXISTS goals_goal_area ON goals (status, goal_area, target_on);`,
   },
+  {
+    version: 8,
+    name: "calendar component revisions",
+    sql: `
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE events ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];
 
 async function migrate(target: RootDb): Promise<void> {

@@ -32,6 +32,20 @@ export const TASK_TYPES = [
 ] as const;
 
 export type TaskType = typeof TASK_TYPES[number];
+export const TASK_GROUPS = {
+  communication: ["call", "email", "text"],
+  coordination: ["meeting", "follow_up", "delegate", "recap"],
+  analysis: ["review", "approve", "research", "decision"],
+  production: ["prepare", "document"],
+  personal_timing: ["reminder", "personal"],
+} as const satisfies Record<string, readonly TaskType[]>;
+
+export type TaskGroup = keyof typeof TASK_GROUPS;
+
+export const TASK_TYPE_GROUP: Record<TaskType, TaskGroup> = Object.fromEntries(
+  Object.entries(TASK_GROUPS).flatMap(([group, types]) => types.map((type) => [type, group])),
+) as Record<TaskType, TaskGroup>;
+
 export type TaskFieldKind = "text" | "textarea" | "date" | "time" | "boolean" | "list" | "select";
 
 export interface TaskFieldDefinition {
@@ -69,6 +83,10 @@ export const COMMON_TASK_FIELDS: TaskFieldDefinition[] = [
   field("result", "Result", "textarea"),
   field("recap", "Recap", "textarea"),
 ];
+
+const OPERATIONAL_FIELD_KEYS = new Set(["waiting_on", "next_action"]);
+export const OPERATIONAL_TASK_FIELDS = COMMON_TASK_FIELDS.filter((item) => OPERATIONAL_FIELD_KEYS.has(item.key));
+export const ADVANCED_COMMON_TASK_FIELDS = COMMON_TASK_FIELDS.filter((item) => !OPERATIONAL_FIELD_KEYS.has(item.key));
 
 export const TASK_TYPE_FIELDS: Record<TaskType, TaskFieldDefinition[]> = {
   call: [
@@ -173,6 +191,18 @@ export const TASK_TYPE_FIELDS: Record<TaskType, TaskFieldDefinition[]> = {
   ],
 };
 
+function uniqueFields(types: readonly TaskType[]): TaskFieldDefinition[] {
+  const fields = new Map<string, TaskFieldDefinition>();
+  for (const type of types) {
+    for (const item of TASK_TYPE_FIELDS[type]) if (!fields.has(item.key)) fields.set(item.key, item);
+  }
+  return [...fields.values()];
+}
+
+export const TASK_GROUP_FIELDS: Record<TaskGroup, TaskFieldDefinition[]> = Object.fromEntries(
+  Object.entries(TASK_GROUPS).map(([group, types]) => [group, uniqueFields(types)]),
+) as Record<TaskGroup, TaskFieldDefinition[]>;
+
 const titleLabel = (value: string): string => value
   .split("_")
   .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
@@ -223,7 +253,8 @@ function cleanField(fieldDef: TaskFieldDefinition, value: unknown): unknown {
 export function sanitizeTaskFramework(taskType: TaskType, raw: unknown): TaskFramework {
   const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const result: Record<string, unknown> = {};
-  for (const fieldDef of [...COMMON_TASK_FIELDS, ...TASK_TYPE_FIELDS[taskType]]) {
+  const group = TASK_TYPE_GROUP[taskType];
+  for (const fieldDef of [...COMMON_TASK_FIELDS, ...TASK_GROUP_FIELDS[group]]) {
     setPath(result, fieldDef.key, cleanField(fieldDef, getPath(source, fieldDef.key)));
   }
   return result as TaskFramework;
@@ -233,7 +264,10 @@ export function taskFrameworkCatalog(): object {
   return {
     goalAreas: GOAL_AREAS.map((value) => ({ value, label: titleLabel(value) })),
     taskTypes: TASK_TYPES.map((value) => ({ value, label: titleLabel(value) })),
-    commonFields: COMMON_TASK_FIELDS,
+    operationalFields: OPERATIONAL_TASK_FIELDS,
+    commonFields: ADVANCED_COMMON_TASK_FIELDS,
     typeFields: TASK_TYPE_FIELDS,
+    taskGroups: TASK_GROUPS,
+    taskTypeGroups: TASK_TYPE_GROUP,
   };
 }

@@ -16,7 +16,9 @@ npm run dev       # http://localhost:4321
 
 ## Production with PM2
 
-Build before asking PM2 to reload. PM2 runs `dist/server.js` directly, so a compiler error cannot create a restart-and-build loop.
+PM2 runs Ledger as the process name `ledger` from `ecosystem.config.cjs`. It starts `dist/server.js` directly. Always compile successfully before asking PM2 to start or reload the process; this avoids deploying a missing or broken `dist/server.js`.
+
+### First start
 
 ```bash
 cd /opt/ledger
@@ -26,6 +28,60 @@ pm2 startOrReload ecosystem.config.cjs --update-env
 pm2 save
 curl http://127.0.0.1:4321/api/health
 ```
+
+Enable PM2 startup once so the saved Ledger process returns after a server reboot. Run the command printed by `pm2 startup`, then save again:
+
+```bash
+pm2 startup
+pm2 save
+```
+
+### Deploy an update
+
+Do not reload Ledger until the install and build have succeeded:
+
+```bash
+cd /opt/ledger
+git pull
+npm ci
+npm run test:run
+npm run prepare:production
+pm2 startOrReload ecosystem.config.cjs --update-env
+pm2 save
+curl http://127.0.0.1:4321/api/health
+```
+
+### PM2 operations
+
+```bash
+pm2 status ledger                         # process status, uptime, restarts, memory
+pm2 logs ledger --lines 100 --nostream    # recent Ledger output and errors
+pm2 restart ledger --update-env           # restart after changing .env
+pm2 reload ledger --update-env            # normal zero-downtime-style reload
+pm2 stop ledger                           # stop without deleting its PM2 definition
+pm2 delete ledger                         # remove Ledger from PM2
+```
+
+For a clean process recreation, delete only the named Ledger process and immediately recreate it from the ecosystem file. This does not delete Ledger's database or `.env`:
+
+```bash
+cd /opt/ledger
+npm run prepare:production
+pm2 delete ledger
+pm2 start ecosystem.config.cjs --only ledger --update-env
+pm2 save
+```
+
+If PM2 says `online` but the site refuses the connection, confirm that Ledger is listening locally, inspect its logs, and then check the HTTPS reverse proxy:
+
+```bash
+curl -i http://127.0.0.1:4321/api/health
+pm2 logs ledger --lines 100 --nostream
+sudo nginx -t
+sudo systemctl status nginx --no-pager
+```
+
+Ledger intentionally listens on `127.0.0.1:4321` in production. The public connection should go through Nginx on HTTPS port 443; port 4321 should not be exposed publicly.
 
 Ledger resolves `.env`, `data`, `backups`, and `export` from the application directory even if PM2 was started elsewhere. On an existing server, do not run `npm run init` unless `/opt/ledger/.env` is genuinely missing: generating a new `MASTER_KEY` makes existing encrypted data unreadable.
 

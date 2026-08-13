@@ -35,7 +35,9 @@ const taskGoalArea = document.getElementById("taskGoalArea");
 const taskType = document.getElementById("taskType");
 const taskOwner = document.getElementById("taskOwner");
 const taskTypeHelp = document.getElementById("taskTypeHelp");
+const taskOperationalFields = document.getElementById("taskOperationalFields");
 const taskFrameworkFields = document.getElementById("taskFrameworkFields");
+const taskAdvancedDetails = document.getElementById("taskAdvancedDetails");
 const taskDetail = document.getElementById("taskDetail");
 const taskEditorError = document.getElementById("taskEditorError");
 const taskSourceSummary = document.getElementById("taskSourceSummary");
@@ -1557,7 +1559,7 @@ function taskFrameworkControl(definition, value) {
 
 function collectTaskFramework() {
   const result = {};
-  for (const control of taskFrameworkFields.querySelectorAll("[data-framework-key]")) {
+  for (const control of [...taskOperationalFields.querySelectorAll("[data-framework-key]"), ...taskFrameworkFields.querySelectorAll("[data-framework-key]")]) {
     let value;
     if (control.dataset.frameworkKind === "boolean") value = control.checked;
     else if (control.dataset.frameworkKind === "list") value = control.value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
@@ -1569,7 +1571,11 @@ function collectTaskFramework() {
 
 function renderTaskFrameworkFields() {
   if (!taskFrameworkCatalogData) return;
+  taskOperationalFields.textContent = "";
   taskFrameworkFields.textContent = "";
+  for (const definition of taskFrameworkCatalogData.operationalFields || []) {
+    taskOperationalFields.append(taskFrameworkControl(definition, frameworkValue(currentTaskFramework, definition.key)));
+  }
   const common = el("div", "task-framework__group");
   common.append(el("h4", null, "Shared task fields"));
   const commonGrid = el("div", "task-framework__grid");
@@ -1593,7 +1599,10 @@ async function openTaskEditor(id, show = true) {
   taskEditorError.textContent = "";
   taskItemsList.textContent = "";
   taskItemsList.append(el("p", "task-editor__loading", "Loading task"));
-  if (show) taskEditorDialog.showModal();
+  if (show) {
+    taskAdvancedDetails.open = false;
+    taskEditorDialog.showModal();
+  }
   try {
     const [, response] = await Promise.all([loadTaskFrameworkCatalog(), fetch(`/api/task/${currentTaskId}`)]);
     const data = await response.json();

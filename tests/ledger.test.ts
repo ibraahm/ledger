@@ -23,6 +23,7 @@ const semantic = await import("../src/semantic.js");
 const security = await import("../src/security.js");
 const prayer = await import("../src/prayer.js");
 const ledgerTools = await import("../src/tools.js");
+const taskFramework = await import("../src/task-framework.js");
 
 after(async () => {
   const db = await dbModule.getDb();
@@ -33,10 +34,10 @@ after(async () => {
 test("versioned migrations run once and include current schema", async () => {
   const db = await dbModule.getDb();
   const first = await db.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
   await dbModule.getDb();
   const second = await db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM schema_migrations");
-  assert.equal(Number(second.rows[0].count), 7);
+  assert.equal(Number(second.rows[0].count), 8);
 });
 
 test("captured text is encrypted at rest and decrypts through the store", async () => {
@@ -109,8 +110,26 @@ test("each commitment has one goal area and one encrypted typed framework", asyn
   });
   assert.deepEqual([changed?.taskType, changed?.goalArea], ["email", "banking"]);
   assert.equal(changed?.framework.subject, "Payout partnership");
-  assert.equal(changed?.framework.call_purpose, undefined);
+  assert.equal(changed?.framework.call_purpose, "Agree the payout partnership path");
+  assert.equal(changed?.revision, call.revision + 1);
+  const changedFamily = await store.updateCommitmentById(call.id, {
+    title: call.title, detail: call.detail, dueOn: call.dueOn, dueTime: call.dueTime,
+    priority: call.priority, taskType: "decision", goalArea: "banking", owner: "me",
+    framework: { decision_needed: "Choose the payout path" },
+  });
+  assert.equal(changedFamily?.framework.decision_needed, "Choose the payout path");
+  assert.equal(changedFamily?.framework.call_purpose, undefined);
   assert.equal(await store.mergeCommitments([call.id, decision.id]), null);
+});
+
+test("fifteen task labels reuse five server validation families", () => {
+  assert.equal(Object.keys(taskFramework.TASK_GROUPS).length, 5);
+  assert.equal(Object.keys(taskFramework.TASK_TYPE_GROUP).length, 15);
+  assert.equal(taskFramework.TASK_TYPE_GROUP.call, "communication");
+  assert.equal(taskFramework.TASK_TYPE_GROUP.delegate, "coordination");
+  assert.equal(taskFramework.TASK_TYPE_GROUP.decision, "analysis");
+  assert.equal(taskFramework.TASK_TYPE_GROUP.document, "production");
+  assert.equal(taskFramework.TASK_TYPE_GROUP.personal, "personal_timing");
 });
 
 test("timezone conversion respects daylight saving time", () => {
@@ -120,12 +139,31 @@ test("timezone conversion respects daylight saving time", () => {
 
 test("calendar export includes events and dated commitments", () => {
   const ics = calendar.buildCalendarIcs(
-    [{ id: 1, title: "State exam", startsAt: "2026-09-14T13:00:00.000Z", endsAt: null, allDay: false, location: "Austin", entityName: null }],
-    [{ id: 2, title: "Submit evidence", detail: "", direction: "mine", taskType: "action", status: "open", dueOn: "2026-09-13", priority: "high", entityId: null, entityName: null, entryId: null, items: [] }],
+    [{ id: 1, title: "State exam", startsAt: "2026-09-14T13:00:00.000Z", endsAt: null, allDay: false, location: "Austin", entityName: null, updatedAt: "2026-08-13T12:00:00.000Z", revision: 3 }],
+    [{ id: 2, title: "Submit evidence", detail: "", direction: "mine", taskType: "prepare", goalArea: "compliance", status: "open", dueOn: "2026-09-13", dueTime: "10:00", priority: "high", owner: "me", framework: {}, taskData: {}, waitingOn: "", nextAction: "Upload evidence", entityId: null, entityName: null, entryId: null, createdAt: "2026-08-13T12:00:00.000Z", updatedAt: "2026-08-13T13:00:00.000Z", revision: 2, completedAt: null, items: [] }],
   );
   assert.match(ics, /SUMMARY:State exam/);
   assert.match(ics, /SUMMARY:Submit evidence/);
   assert.match(ics, /X-WR-TIMEZONE:/);
+  assert.match(ics, /DTSTART:20260913T140000Z/);
+  assert.match(ics, /LAST-MODIFIED:20260813T130000Z/);
+  assert.match(ics, /SEQUENCE:2/);
+});
+
+test("memory search includes encrypted task workflow fields", async () => {
+  const marker = `bank-response-${crypto.randomBytes(4).toString("hex")}`;
+  const task = await store.addCommitment({
+    title: "Follow up on treasury setup",
+    taskType: "follow_up",
+    goalArea: "banking",
+    framework: { waiting_on: marker, next_action: "Review the reply", recap: "The application is pending" },
+  });
+  const hits = await store.searchMemory(marker);
+  assert.ok(hits.some((hit) => hit.kind === "task" && hit.id === task.id));
+  assert.match(hits.find((hit) => hit.kind === "task" && hit.id === task.id)?.body || "", /Waiting on:/);
+  const db = await dbModule.getDb();
+  const encrypted = await db.query<any>("SELECT framework_enc FROM commitments WHERE id = $1", [task.id]);
+  assert.ok(!String(encrypted.rows[0].framework_enc).includes(marker));
 });
 
 test("semantic ranking accepts only valid Ledger record ids", () => {
