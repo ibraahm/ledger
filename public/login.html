@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#173c35" />
+    <meta name="description" content="Sign in to Ledger, your private memory." />
+    <title>Unlock Ledger</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="login-page">
+    <main class="gate">
+      <section class="gate__story" aria-labelledby="welcomeTitle">
+        <div class="brand-lockup brand-lockup--gate">
+          <p class="wordmark">Ledger</p>
+          <p>Private memory</p>
+        </div>
+        <h1 id="welcomeTitle">Remember what matters next.</h1>
+        <p>Capture personal and professional thoughts. Ledger connects what you learn, who matters, what you want, and what to do next.</p>
+      </section>
+
+      <form class="gate__form" id="loginForm">
+        <div>
+          <p class="gate__label">Single-user workspace</p>
+          <h2>Unlock Ledger</h2>
+          <p class="gate__hint">Your private memory is encrypted at rest.</p>
+        </div>
+        <input
+          class="visually-hidden"
+          type="text"
+          name="username"
+          value="Ledger owner"
+          autocomplete="username"
+          readonly
+          tabindex="-1"
+        />
+        <div class="gate__field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required autofocus />
+        </div>
+        <button type="submit" id="go">Open Ledger</button>
+        <p class="gate__session">This browser stays signed in for 30 days.</p>
+        <p class="gate__error" id="error" role="alert" hidden></p>
+      </form>
+    </main>
+
+    <script src="/login.js"></script>
+  </body>
+</html>

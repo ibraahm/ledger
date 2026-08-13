@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#173c35" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Ledger" />
+    <meta
+      name="description"
+      content="Private memory for personal and professional learning, growth, goals, tasks, and relationships."
+    />
+    <title>Ledger | Private memory</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="bar">
+        <div class="brand-lockup">
+          <h1 class="wordmark">Ledger</h1>
+          <p>Private memory</p>
+        </div>
+        <nav class="primary-nav" aria-label="Primary">
+          <button class="is-on" type="button" data-area-target="capture" aria-current="page">Assistant</button>
+          <button type="button" data-area-target="memory">Memory</button>
+          <button type="button" data-area-target="feed">Feed</button>
+        </nav>
+        <div class="bar__actions">
+          <span class="bar__meta" id="meta" aria-live="polite">Connecting</span>
+          <button class="bar__button" id="settings" type="button">Settings</button>
+          <button class="bar__button bar__button--quiet" id="logout" type="button">Lock</button>
+        </div>
+      </header>
+
+      <div id="banner" class="banner" role="status" hidden></div>
+
+      <main class="workspace">
+        <section class="workspace__view capture-view" id="captureView" data-area="capture" aria-labelledby="captureTitle">
+          <div class="thread">
+          <header class="thread__intro">
+            <div class="thread__intro-copy">
+              <p class="thread__label">Private assistant</p>
+              <h2 id="captureTitle">Tell Ledger what to do</h2>
+              <p>Ask, remember, schedule, change, finish, or review anything already in Ledger.</p>
+            </div>
+            <button class="thread__clear" id="clearChat" type="button" hidden>Clear chat</button>
+          </header>
+
+          <div class="stream" id="stream" aria-live="polite">
+            <section class="empty">
+              <h3>What should Ledger handle?</h3>
+              <p>Give it an instruction or ask a question. Ledger will use your memory and show every change.</p>
+              <div class="empty__examples" aria-label="Example instructions">
+                <button type="button" data-prompt="What needs my attention today? Give me the order to handle it.">
+                  Plan my day
+                </button>
+                <button type="button" data-prompt="Move the Texas exam preparation task to Friday and make it high priority">
+                  Change a task
+                </button>
+                <button type="button" data-prompt="Remember that Dana prefers due diligence updates by email">
+                  Remember context
+                </button>
+                <button type="button" data-prompt="Review my active goals and tell me what is at risk">
+                  Review progress
+                </button>
+              </div>
+            </section>
+          </div>
+
+          <form class="dump" id="dumpForm">
+            <div class="dump__field">
+              <label class="visually-hidden" for="dump">Instruction or question for Ledger</label>
+              <div class="slash-menu" id="slashMenu" role="listbox" aria-label="Ledger shortcuts" hidden></div>
+              <textarea
+                id="dump"
+                rows="1"
+                enterkeyhint="send"
+                aria-controls="slashMenu"
+                aria-expanded="false"
+                placeholder="Ask Ledger to remember, plan, change, finish, or review"
+              ></textarea>
+              <button
+                class="dump__slash"
+                id="slashTrigger"
+                type="button"
+                aria-label="Open shortcuts"
+                aria-controls="slashMenu"
+                aria-expanded="false"
+                title="Shortcuts"
+              >/</button>
+              <span class="dump__hint">Enter to send. Shift + Enter for a new line.</span>
+            </div>
+            <button type="submit" id="send">Ask Ledger</button>
+          </form>
+          </div>
+        </section>
+
+        <section class="workspace__view memory-view" id="memoryView" data-area="memory" aria-labelledby="memoryTitle" hidden>
+          <header class="view-head">
+            <h2 id="memoryTitle">Memory</h2>
+            <span>Search notes, people, projects, and filed records.</span>
+          </header>
+
+          <div class="memory-toolbar">
+            <form class="memory-search" id="memorySearchForm" role="search">
+              <label class="visually-hidden" for="memorySearch">Search memory</label>
+              <input id="memorySearch" type="search" placeholder="Search memory" autocomplete="off" />
+              <button type="submit">Search</button>
+            </form>
+            <div class="memory-filters" aria-label="Memory filters">
+              <button class="is-on" id="recentMemory" type="button">Recent</button>
+              <button id="reviewMemory" type="button">Needs review <span id="pendingCount" hidden></span></button>
+            </div>
+          </div>
+
+          <div class="memory-layout">
+            <section class="memory-results" aria-label="Memory results">
+              <div class="memory-results__head">
+                <h3 id="memoryResultsTitle">Recent memory</h3>
+                <span id="memoryResultCount"></span>
+              </div>
+              <div class="memory-results__list" id="memoryResults" aria-live="polite"></div>
+            </section>
+            <aside class="memory-detail" id="memoryDetail" aria-live="polite">
+              <div class="memory-detail__empty">
+                <h3>Select a memory</h3>
+                <p>Open a result to inspect its details, source, and related actions.</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="workspace__view feed-view" id="feedView" data-area="feed" aria-labelledby="feedTitle" hidden>
+          <header class="view-head view-head--feed">
+            <h2 id="feedTitle">Calendar</h2>
+            <span>Your events and dated commitments in one place.</span>
+          </header>
+          <nav class="tabs feed-tabs" role="tablist" aria-label="Feed views">
+            <button class="tab is-on" data-view="overview" role="tab" aria-selected="true">Overview</button>
+            <button class="tab" data-view="tasks" role="tab" aria-selected="false">Commitments</button>
+            <button class="tab" data-view="goals" role="tab" aria-selected="false">Goals</button>
+          </nav>
+          <div class="agenda" id="agenda"></div>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="calendar-connect" id="calendarConnectDialog" aria-labelledby="calendarConnectTitle">
+      <div class="calendar-connect__panel">
+        <header class="calendar-connect__head">
+          <div>
+            <p>Read-only subscription</p>
+            <h2 id="calendarConnectTitle">Keep Apple Calendar updated</h2>
+          </div>
+          <button class="settings__close" id="closeCalendarConnect" type="button" aria-label="Close calendar connection">Close</button>
+        </header>
+        <div class="calendar-connect__body">
+          <p class="calendar-connect__intro">Subscribe once. Apple Calendar will refresh events and dated commitments from Ledger.</p>
+          <label class="settings__label" for="calendarSubscriptionUrl">Private subscription address</label>
+          <div class="calendar-connect__url">
+            <input class="settings__input" id="calendarSubscriptionUrl" type="text" readonly />
+            <button class="settings__secondary" id="copyCalendarUrl" type="button">Copy</button>
+          </div>
+          <p class="settings__hint" id="calendarConnectStatus">Anyone with this address can read the calendar. Keep it private.</p>
+          <div class="calendar-connect__actions">
+            <button class="calendar-connect__rotate" id="rotateCalendarUrl" type="button">Replace private link</button>
+            <a class="calendar-connect__snapshot" href="/api/calendar.ics" download="Ledger.ics">Download snapshot</a>
+            <a class="settings__save calendar-connect__open" id="openAppleCalendar" href="#">Open Apple Calendar</a>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="task-editor" id="taskEditorDialog" aria-labelledby="taskEditorTitle">
+      <div class="task-editor__panel">
+        <header class="task-editor__head">
+          <div>
+            <p>Commitment</p>
+            <h2 id="taskEditorTitle">Edit task</h2>
+          </div>
+          <button class="settings__close" id="closeTaskEditor" type="button" aria-label="Close task editor">Close</button>
+        </header>
+        <form class="task-editor__form" id="taskEditorForm">
+          <label class="settings__label" for="taskTitle">Task</label>
+          <input class="settings__input" id="taskTitle" type="text" required />
+          <div class="task-editor__fields">
+            <div>
+              <label class="settings__label" for="taskDueOn">Due date</label>
+              <input class="settings__input" id="taskDueOn" type="date" />
+            </div>
+            <div>
+              <label class="settings__label" for="taskDueTime">Due time</label>
+              <input class="settings__input" id="taskDueTime" type="time" />
+            </div>
+            <div>
+              <label class="settings__label" for="taskPriority">Priority</label>
+              <select class="settings__input" id="taskPriority">
+                <option value="low">Low</option>
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div>
+              <label class="settings__label" for="taskGoalArea">Goal Area</label>
+              <select class="settings__input" id="taskGoalArea"></select>
+            </div>
+            <div>
+              <label class="settings__label" for="taskType">Task type</label>
+              <select class="settings__input" id="taskType"></select>
+            </div>
+            <div>
+              <label class="settings__label" for="taskOwner">Owner</label>
+              <input class="settings__input" id="taskOwner" type="text" value="me" />
+            </div>
+          </div>
+          <p class="task-editor__type-help" id="taskTypeHelp">Choose the one framework that matches the work.</p>
+          <section class="task-framework" aria-labelledby="taskFrameworkTitle">
+            <div class="task-editor__section-head">
+              <div>
+                <h3 id="taskFrameworkTitle">Structured task brief</h3>
+                <p>Shared fields plus details for this task type. Sensitive values stay encrypted.</p>
+              </div>
+            </div>
+            <div class="task-framework__fields" id="taskFrameworkFields"></div>
+          </section>
+          <label class="settings__label" for="taskDetail">Additional context</label>
+          <textarea class="settings__input task-editor__detail" id="taskDetail" rows="3"></textarea>
+          <p class="settings__error" id="taskEditorError" role="alert"></p>
+          <div class="task-editor__save-row">
+            <span class="settings__hint" id="taskSourceSummary"></span>
+            <button class="settings__save" id="saveTask" type="submit">Save task</button>
+          </div>
+        </form>
+        <section class="task-editor__items" aria-labelledby="taskItemsTitle">
+          <div class="task-editor__section-head">
+            <div>
+              <h3 id="taskItemsTitle">Batch items</h3>
+              <p>Keep repeated work inside this parent task.</p>
+            </div>
+          </div>
+          <div id="taskItemsList"></div>
+          <form class="task-item-add" id="taskItemForm">
+            <label class="visually-hidden" for="taskItemTitle">New batch item</label>
+            <input class="settings__input" id="taskItemTitle" type="text" placeholder="Add an agent, vendor, file, location, or deliverable" />
+            <button class="settings__secondary" type="submit">Add item</button>
+          </form>
+        </section>
+        <section class="task-editor__merge" aria-labelledby="taskMergeTitle">
+          <h3 id="taskMergeTitle">Merge repeated task</h3>
+          <p>Move another open task into this workstream as a batch item.</p>
+          <div class="task-editor__merge-row">
+            <label class="visually-hidden" for="taskMergeSelect">Task to merge</label>
+            <select class="settings__input" id="taskMergeSelect">
+              <option value="">Choose another task</option>
+            </select>
+            <button class="settings__secondary" id="mergeTask" type="button">Merge</button>
+          </div>
+        </section>
+        <details class="task-editor__source" id="taskSourceDetails">
+          <summary>Original source</summary>
+          <p id="taskSourceNote"></p>
+        </details>
+      </div>
+    </dialog>
+
+    <dialog class="settings" id="settingsDialog" aria-labelledby="settingsTitle">
+      <div class="settings__panel">
+        <header class="settings__head">
+          <div>
+            <p>Ledger settings</p>
+            <h2 id="settingsTitle">Settings</h2>
+          </div>
+          <button class="settings__close" id="closeSettings" type="button" aria-label="Close settings">Close</button>
+        </header>
+
+        <nav class="settings__nav" role="tablist" aria-label="Settings sections">
+          <button class="is-on" id="modelSettingsTab" type="button" role="tab" aria-selected="true" data-settings-view="model">
+            AI model
+          </button>
+          <button id="securitySettingsTab" type="button" role="tab" aria-selected="false" data-settings-view="security">
+            Security
+          </button>
+          <button id="prayerSettingsTab" type="button" role="tab" aria-selected="false" data-settings-view="prayer">
+            Prayer
+          </button>
+          <button id="vaultSettingsTab" type="button" role="tab" aria-selected="false" data-settings-view="vault">
+            Vault
+          </button>
+          <button id="backupSettingsTab" type="button" role="tab" aria-selected="false" data-settings-view="backup">
+            Backups
+          </button>
+        </nav>
+
+        <section class="settings__view" id="modelSettingsView" data-settings-panel="model">
+          <form id="settingsForm">
+            <h3>Choose how Ledger files notes</h3>
+            <p class="settings__intro">The selected model processes new notes immediately. Existing records do not change.</p>
+
+            <label class="settings__label" for="modelName">Ollama model</label>
+            <select class="settings__input" id="modelName" name="model" required>
+              <option value="">Loading models</option>
+            </select>
+            <p class="settings__model-detail" id="modelDetails"></p>
+            <p class="settings__hint">
+              For reliable filing, use
+              <button class="settings__pick" type="button" data-model="gpt-oss:120b">gpt-oss:120b</button>.
+              GPT-OSS is available in 20B and 120B sizes.
+            </p>
+            <p class="settings__hint" id="accessNote"></p>
+
+            <dl class="settings__status">
+              <div><dt>Connection</dt><dd id="modelHost">Not connected</dd></div>
+              <div><dt>API key</dt><dd id="keyStatus">Checking</dd></div>
+            </dl>
+            <p class="settings__hint" id="keyHelp"></p>
+            <p class="settings__error" id="settingsError" role="alert"></p>
+
+            <div class="settings__actions">
+              <a href="https://ollama.com/pricing" target="_blank" rel="noreferrer">View Ollama plans</a>
+              <button class="settings__save" id="saveSettings" type="submit">Save model</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="settings__view" id="prayerSettingsView" data-settings-panel="prayer" hidden>
+          <form id="prayerSettingsForm">
+            <h3>Daily prayer times</h3>
+            <p class="settings__intro">
+              Ledger fetches calculated prayer starts once each day and uses the saved result in chat. Nothing is added to Calendar automatically.
+            </p>
+
+            <div class="settings__prayer-location">
+              <div>
+                <label class="settings__label" for="prayerLatitude">Latitude</label>
+                <input class="settings__input" id="prayerLatitude" type="number" min="-90" max="90" step="any" required />
+              </div>
+              <div>
+                <label class="settings__label" for="prayerLongitude">Longitude</label>
+                <input class="settings__input" id="prayerLongitude" type="number" min="-180" max="180" step="any" required />
+              </div>
+              <div>
+                <label class="settings__label" for="prayerMethod">Method ID</label>
+                <input class="settings__input" id="prayerMethod" type="number" min="0" max="99" step="1" placeholder="Service default" />
+              </div>
+            </div>
+            <p class="settings__hint">
+              Your current method is 2 (ISNA). Choose the method used by your local Islamic authority.
+              <a href="https://aladhan.com/calculation-methods" target="_blank" rel="noreferrer">View method guidance</a>.
+            </p>
+
+            <div class="prayer-summary" id="prayerSummary" hidden>
+              <div class="prayer-summary__head">
+                <strong id="prayerDate">No times fetched</strong>
+                <span id="prayerMeta"></span>
+              </div>
+              <dl class="prayer-times" id="prayerTimes"></dl>
+            </div>
+            <p class="settings__error" id="prayerError" role="alert"></p>
+            <p class="settings__hint" id="prayerStatus">Daily refresh has not run yet.</p>
+            <div class="settings__actions">
+              <button class="settings__secondary" id="refreshPrayerTimes" type="button">Refresh now</button>
+              <button class="settings__save" id="savePrayerSettings" type="submit">Save and fetch</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="settings__view" id="vaultSettingsView" data-settings-panel="vault" hidden>
+          <form id="vaultForm">
+            <h3>Markdown vault</h3>
+            <p class="settings__intro">
+              Ledger reads Markdown files from this folder and stores an encrypted, searchable copy. Source files are never changed.
+            </p>
+
+            <label class="settings__label" for="vaultPath">Vault folder</label>
+            <input class="settings__input" id="vaultPath" name="vault-path" type="text" autocomplete="off" placeholder="D:\Notes\Vault" required />
+            <p class="settings__hint" id="vaultStatus">No vault synchronized.</p>
+            <p class="settings__error" id="vaultError" role="alert"></p>
+            <div class="settings__actions settings__actions--end">
+              <button class="settings__save" id="syncVault" type="submit">Sync vault</button>
+            </div>
+          </form>
+          <div class="maintenance">
+            <div>
+              <h3>Remove duplicate noise</h3>
+              <p class="settings__intro">Merge repeated active goals and open commitments. Redundant records are archived, not erased.</p>
+              <p class="settings__hint" id="maintenanceStatus">History stays available for review.</p>
+            </div>
+            <button class="settings__secondary" id="consolidateDuplicates" type="button">Consolidate repeated work</button>
+          </div>
+        </section>
+
+        <section class="settings__view" id="backupSettingsView" data-settings-panel="backup" hidden>
+          <h3>Encrypted backup and restore</h3>
+          <p class="settings__intro">Ledger creates one encrypted backup each day. Download a copy for storage away from this server.</p>
+          <div class="backup-toolbar">
+            <button class="settings__save" id="createBackup" type="button">Create backup</button>
+            <span class="settings__hint" id="backupRetention"></span>
+          </div>
+          <label class="settings__label" for="backupSelect">Available backups</label>
+          <select class="settings__input" id="backupSelect">
+            <option value="">Loading backups</option>
+          </select>
+          <div class="backup-download-row">
+            <a class="settings__secondary" id="downloadBackup" href="#">Download selected</a>
+          </div>
+          <div class="backup-restore">
+            <h3>Restore selected backup</h3>
+            <p class="settings__intro">Restore replaces the current database. Ledger verifies the encrypted file before changing anything.</p>
+            <label class="settings__label" for="backupPassword">Current Ledger password</label>
+            <input class="settings__input" id="backupPassword" type="password" autocomplete="current-password" />
+            <label class="settings__label" for="backupConfirmation">Type RESTORE</label>
+            <input class="settings__input" id="backupConfirmation" type="text" autocomplete="off" />
+            <button class="settings__secondary backup-restore__button" id="restoreBackup" type="button">Restore selected backup</button>
+          </div>
+          <p class="settings__error" id="backupError" role="alert"></p>
+          <p class="settings__hint" id="backupStatus">Backups use the Ledger encryption key. Keep that key with your recovery records.</p>
+        </section>
+
+        <section class="settings__view" id="securitySettingsView" data-settings-panel="security" hidden>
+          <section class="connection-security" aria-labelledby="connectionSecurityTitle">
+            <div class="connection-security__head">
+              <div>
+                <h3 id="connectionSecurityTitle">Connection security</h3>
+                <p id="connectionSecurityAddress">Checking this browser connection.</p>
+              </div>
+              <strong id="connectionSecurityStatus" data-tone="neutral">Checking</strong>
+            </div>
+            <p class="settings__hint" id="connectionSecurityDetail">Ledger is checking whether traffic is encrypted in transit.</p>
+          </section>
+          <form id="passwordForm">
+            <h3>Change your Ledger password</h3>
+            <p class="settings__intro">
+              Ledger stores only a salted password hash. Changing it signs out every other session.
+            </p>
+
+            <label class="settings__label" for="currentPassword">Current password</label>
+            <input class="settings__input" id="currentPassword" name="current-password" type="password" autocomplete="current-password" required />
+
+            <div class="settings__passwords">
+              <div>
+                <label class="settings__label" for="newPassword">New password</label>
+                <input class="settings__input" id="newPassword" name="new-password" type="password" minlength="10" autocomplete="new-password" required />
+              </div>
+              <div>
+                <label class="settings__label" for="confirmPassword">Confirm password</label>
+                <input class="settings__input" id="confirmPassword" name="confirm-password" type="password" minlength="10" autocomplete="new-password" required />
+              </div>
+            </div>
+            <p class="settings__hint">This browser remains signed in for 30 days. Your password manager can save the new password.</p>
+            <p class="settings__error" id="passwordError" role="alert"></p>
+            <div class="settings__actions settings__actions--end">
+              <button class="settings__save" id="changePassword" type="submit">Change password</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

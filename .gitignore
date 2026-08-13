@@ -1,0 +1,21 @@
+node_modules/
+dist/
+data/
+export/
+backups/
+.env
+
+# Vault runtime cleanup only; keep real vault notes visible to git.
+vault/.anchor-cleanup/
+vault/.fuse_hidden*
+
+# Local/editor/runtime leftovers
+.DS_Store
+Thumbs.db
+.fuse_hidden*
+*.log
+*.pid
+.cache/
+.tmp/
+tmp/
+temp/
