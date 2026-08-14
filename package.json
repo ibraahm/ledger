@@ -13,6 +13,7 @@
     "start": "node dist/server.js",
     "start:production": "node dist/server.js",
     "export": "tsx src/export.ts",
+    "reset-password": "npm run build --silent && node dist/reset-password.js",
     "test": "npm run test:run",
     "test:run": "tsx --test tests/*.test.ts"
   },

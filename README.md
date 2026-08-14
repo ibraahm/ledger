@@ -87,6 +87,19 @@ Ledger resolves `.env`, `data`, `backups`, and `export` from the application dir
 
 Before reloading, verify that `/opt/ledger/.env` contains non-empty `MASTER_KEY`, `SESSION_SECRET`, and `PASSWORD_HASH`. If Ollama reports 401, replace `OLLAMA_API_KEY` with a valid key and reload with `--update-env`. An Ollama error does not discard the raw note; Ledger keeps it in Needs review for retry.
 
+### Reset a forgotten password
+
+Ledger stores a one-way scrypt hash, so the existing password cannot be displayed or recovered. Reset it interactively from the server:
+
+```bash
+cd /opt/ledger
+npm run reset-password
+pm2 restart ledger --update-env
+pm2 save
+```
+
+The command hides keyboard input, asks for confirmation, writes a new `PASSWORD_HASH`, and rotates `SESSION_SECRET` to invalidate existing browser sessions. It does not change `MASTER_KEY`, `CALENDAR_FEED_TOKEN`, the database, or encrypted memory. Never run `npm run init` to reset a password on an existing installation.
+
 ## Storage
 
 No database to install. PGlite runs a real Postgres engine in-process against `./data`. When you outgrow it, set `DATABASE_URL` and point at a server. The same numbered migrations run on either storage engine.
