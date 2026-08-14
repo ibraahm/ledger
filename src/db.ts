@@ -303,6 +303,44 @@ ALTER TABLE commitments ADD COLUMN IF NOT EXISTS recurrence TEXT NOT NULL DEFAUL
 ALTER TABLE commitments ADD COLUMN IF NOT EXISTS recurrence_anchor_on DATE;
 CREATE INDEX IF NOT EXISTS commitments_recurrence ON commitments (status, recurrence, due_on);`,
   },
+  {
+    version: 10,
+    name: "chat context clarification and decision steps",
+    sql: `
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]';
+CREATE TABLE IF NOT EXISTS assistant_state (
+  key TEXT PRIMARY KEY,
+  value_enc TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS assistant_rules (
+  id BIGSERIAL PRIMARY KEY,
+  rule_key TEXT NOT NULL UNIQUE,
+  body_enc TEXT NOT NULL,
+  tokens TEXT[] NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'correction',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS assistant_rules_tokens ON assistant_rules USING GIN (tokens);
+CREATE INDEX IF NOT EXISTS assistant_rules_updated ON assistant_rules (updated_at DESC);`,
+  },
+  {
+    version: 11,
+    name: "encrypted stakeholder contact ledger",
+    sql: `
+ALTER TABLE entities ADD COLUMN IF NOT EXISTS last_contact_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS entities_last_contact ON entities (last_contact_at, lower(name));
+CREATE TABLE IF NOT EXISTS entity_contacts (
+  id BIGSERIAL PRIMARY KEY,
+  entity_id BIGINT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  contacted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  channel TEXT NOT NULL DEFAULT 'other',
+  note_enc TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS entity_contacts_entity ON entity_contacts (entity_id, contacted_at DESC);`,
+  },
 ];
 
 async function migrate(target: RootDb): Promise<void> {

@@ -1,5 +1,5 @@
 import { getDb, withTransaction } from "./db.js";
-import { decrypt, encrypt, tokenize } from "./crypto.js";
+import { blindToken, decrypt, encrypt, tokenize } from "./crypto.js";
 import { config, type EntityKind } from "./config.js";
 import { legacyLocalStampToUtc } from "./time.js";
 import {
@@ -218,6 +218,10 @@ export interface Entity {
   status: string;
   meta: Record<string, any>;
   notes: string;
+  lastContactAt: string | null;
+  contactCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 function toEntity(row: any): Entity {
@@ -230,6 +234,10 @@ function toEntity(row: any): Entity {
     status: row.status,
     meta: row.meta || {},
     notes: row.notes_enc ? decrypt(row.notes_enc) : "",
+    lastContactAt: row.last_contact_at ? isoStamp(row.last_contact_at) : null,
+    contactCount: Number(row.contact_count || 0),
+    createdAt: isoStamp(row.created_at),
+    updatedAt: isoStamp(row.updated_at),
   };
 }
 
@@ -305,6 +313,92 @@ export async function entityCounts(): Promise<{ kind: string; count: number }[]>
     `SELECT kind, COUNT(*)::int AS count FROM entities WHERE status <> 'archived' GROUP BY kind ORDER BY count DESC`,
   );
   return rows;
+}
+
+export const STAKEHOLDER_KINDS = ["person", "organization", "partner", "agent"] as const;
+
+export interface ContactLog {
+  id: number;
+  entityId: number;
+  contactedAt: string;
+  channel: string;
+  note: string;
+  createdAt: string;
+}
+
+function toContactLog(row: any): ContactLog {
+  return {
+    id: Number(row.id),
+    entityId: Number(row.entity_id),
+    contactedAt: isoStamp(row.contacted_at),
+    channel: row.channel || "other",
+    note: row.note_enc ? decrypt(row.note_enc) : "",
+    createdAt: isoStamp(row.created_at),
+  };
+}
+
+/** Relationship ledger: never-contacted records first, then oldest touch. */
+export async function listStakeholders(query = "", limit = 200): Promise<Entity[]> {
+  const db = await getDb();
+  const q = query.replace(/\s+/g, " ").trim();
+  const { rows } = await db.query(
+    `SELECT e.*, COUNT(ec.id)::int AS contact_count
+     FROM entities e LEFT JOIN entity_contacts ec ON ec.entity_id = e.id
+     WHERE e.status <> 'archived'
+       AND e.kind = ANY($1::text[])
+       AND ($2 = '' OR lower(e.name) LIKE '%' || lower($2) || '%'
+         OR lower(COALESCE(e.meta->>'role', '')) LIKE '%' || lower($2) || '%'
+         OR lower(COALESCE(e.meta->>'organization', '')) LIKE '%' || lower($2) || '%'
+         OR lower(COALESCE(e.meta->>'category', e.meta->>'relationship', '')) LIKE '%' || lower($2) || '%')
+     GROUP BY e.id
+     ORDER BY e.last_contact_at ASC NULLS FIRST, lower(e.name) ASC
+     LIMIT $3`,
+    [[...STAKEHOLDER_KINDS], q, Math.min(Math.max(limit, 1), 500)],
+  );
+  return rows.map(toEntity);
+}
+
+export async function contactsForEntity(entityId: number, limit = 100): Promise<ContactLog[]> {
+  const db = await getDb();
+  const { rows } = await db.query(
+    `SELECT * FROM entity_contacts WHERE entity_id = $1 ORDER BY contacted_at DESC, id DESC LIMIT $2`,
+    [entityId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return rows.map(toContactLog);
+}
+
+export async function addContactLog(input: {
+  entityId: number;
+  contactedAt?: string;
+  channel?: string;
+  note?: string;
+}): Promise<ContactLog> {
+  const channel = String(input.channel || "other").toLowerCase();
+  if (!["call", "email", "meeting", "message", "text", "other"].includes(channel)) {
+    throw new Error("Contact channel must be call, email, meeting, message, text, or other.");
+  }
+  const contactedAt = input.contactedAt ? new Date(input.contactedAt) : new Date();
+  if (Number.isNaN(contactedAt.getTime())) throw new Error("Enter a valid contact date and time.");
+  return withTransaction(async () => {
+    const db = await getDb();
+    const entity = await db.query<{ id: string }>(
+      `SELECT id FROM entities WHERE id = $1 AND kind = ANY($2::text[]) AND status <> 'archived' LIMIT 1`,
+      [input.entityId, [...STAKEHOLDER_KINDS]],
+    );
+    if (!entity.rows[0]) throw new Error("Stakeholder not found.");
+    const { rows } = await db.query(
+      `INSERT INTO entity_contacts (entity_id, contacted_at, channel, note_enc)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [input.entityId, contactedAt.toISOString(), channel, input.note?.trim() ? encrypt(input.note.trim()) : null],
+    );
+    await db.query(
+      `UPDATE entities SET last_contact_at = CASE
+         WHEN last_contact_at IS NULL OR last_contact_at < $2 THEN $2 ELSE last_contact_at END,
+         updated_at = now() WHERE id = $1`,
+      [input.entityId, contactedAt.toISOString()],
+    );
+    return toContactLog(rows[0]);
+  });
 }
 
 /* ------------------------------------------------------------ facts */
@@ -1736,6 +1830,8 @@ export async function searchMemory(query: string, limit = 50): Promise<MemoryHit
   const db = await getDb();
   const term = query.trim();
   const like = `%${term}%`;
+  const queryTerms = [...new Set(term.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/gu) || [])]
+    .filter((word) => !new Set(["the", "and", "for", "with", "this", "that", "what", "when", "where", "which", "task", "ledger"]).has(word));
   const perKind = Math.max(5, Math.min(limit, 30));
 
   const [entities, commitments, goals, events, textHits] = await Promise.all([
@@ -1822,7 +1918,7 @@ export async function searchMemory(query: string, limit = 50): Promise<MemoryHit
         searchable,
       };
     })
-    .filter((hit) => !term || hit.searchable.includes(term.toLocaleLowerCase()))
+    .filter((hit) => !term || hit.searchable.includes(term.toLocaleLowerCase()) || queryTerms.some((word) => hit.searchable.includes(word)))
     .slice(0, perKind)
     .map(({ searchable: _searchable, ...hit }) => hit);
 
@@ -1871,12 +1967,13 @@ export async function entityDetail(id: number): Promise<{
   tasks: Commitment[];
   goals: Goal[];
   events: CalEvent[];
+  contacts: ContactLog[];
 } | null> {
   const db = await getDb();
   const { rows } = await db.query(`SELECT * FROM entities WHERE id = $1 LIMIT 1`, [id]);
   if (!rows[0]) return null;
   const entity = toEntity(rows[0]);
-  const [facts, tasksResult, goalsResult, eventsResult] = await Promise.all([
+  const [facts, tasksResult, goalsResult, eventsResult, contacts] = await Promise.all([
     factsFor(id, 100),
     db.query(
       `SELECT c.*, e.name AS entity_name FROM commitments c LEFT JOIN entities e ON e.id = c.entity_id
@@ -1893,6 +1990,7 @@ export async function entityDetail(id: number): Promise<{
        WHERE ev.entity_id = $1 ORDER BY ev.starts_at DESC LIMIT 100`,
       [id],
     ),
+    contactsForEntity(id, 100),
   ]);
   return {
     entity,
@@ -1900,6 +1998,7 @@ export async function entityDetail(id: number): Promise<{
     tasks: tasksResult.rows.map(toCommitment),
     goals: goalsResult.rows.map(toGoal),
     events: eventsResult.rows.map(toEvent),
+    contacts,
   };
 }
 
@@ -1942,14 +2041,20 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   actions: { label: string }[];
+  steps: { label: string; detail?: string }[];
   at: string;
 }
 
-export async function addMessage(role: "user" | "assistant", content: string, actions: any[] = []): Promise<number> {
+export async function addMessage(
+  role: "user" | "assistant",
+  content: string,
+  actions: any[] = [],
+  steps: { label: string; detail?: string }[] = [],
+): Promise<number> {
   const db = await getDb();
   const { rows } = await db.query<{ id: string }>(
-    `INSERT INTO messages (role, body_enc, actions) VALUES ($1, $2, $3) RETURNING id`,
-    [role, encrypt(content), JSON.stringify(actions)],
+    `INSERT INTO messages (role, body_enc, actions, steps) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [role, encrypt(content), JSON.stringify(actions), JSON.stringify(steps)],
   );
   return Number(rows[0].id);
 }
@@ -1965,6 +2070,7 @@ export async function recentMessages(limit = 40): Promise<Message[]> {
     role: r.role,
     content: decrypt(r.body_enc),
     actions: r.actions || [],
+    steps: r.steps || [],
     at: isoStamp(r.created_at),
   }));
 }
@@ -1978,5 +2084,84 @@ export async function deleteMessage(id: number): Promise<boolean> {
 export async function clearMessages(): Promise<number> {
   const db = await getDb();
   const { rows } = await db.query<{ id: string }>(`DELETE FROM messages RETURNING id`);
+  await db.query(`DELETE FROM assistant_state WHERE key = 'pending_clarification'`);
   return rows.length;
+}
+
+/* ------------------------------------------------ chat intelligence */
+
+export interface PendingClarification {
+  operation: string;
+  originalInstruction: string;
+  question: string;
+  missingField?: string;
+  candidates?: string[];
+  createdAt: string;
+}
+
+export async function getPendingClarification(): Promise<PendingClarification | null> {
+  const db = await getDb();
+  const { rows } = await db.query<{ value_enc: string }>(
+    `SELECT value_enc FROM assistant_state WHERE key = 'pending_clarification' LIMIT 1`,
+  );
+  if (!rows[0]) return null;
+  try {
+    return JSON.parse(decrypt(rows[0].value_enc)) as PendingClarification;
+  } catch {
+    await clearPendingClarification();
+    return null;
+  }
+}
+
+export async function setPendingClarification(value: PendingClarification): Promise<void> {
+  const db = await getDb();
+  await db.query(
+    `INSERT INTO assistant_state (key, value_enc, updated_at)
+     VALUES ('pending_clarification', $1, now())
+     ON CONFLICT (key) DO UPDATE SET value_enc = EXCLUDED.value_enc, updated_at = now()`,
+    [encrypt(JSON.stringify(value))],
+  );
+}
+
+export async function clearPendingClarification(): Promise<void> {
+  const db = await getDb();
+  await db.query(`DELETE FROM assistant_state WHERE key = 'pending_clarification'`);
+}
+
+export interface AssistantRule {
+  id: number;
+  body: string;
+  source: string;
+  updatedAt: string;
+}
+
+export async function saveAssistantRule(body: string, source = "correction"): Promise<void> {
+  const clean = body.replace(/\s+/g, " ").trim().slice(0, 1000);
+  if (!clean) return;
+  const db = await getDb();
+  const ruleKey = blindToken(clean);
+  await db.query(
+    `INSERT INTO assistant_rules (rule_key, body_enc, tokens, source)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (rule_key) DO UPDATE SET body_enc = EXCLUDED.body_enc, tokens = EXCLUDED.tokens,
+       source = EXCLUDED.source, updated_at = now()`,
+    [ruleKey, encrypt(clean), tokenize(clean), source],
+  );
+}
+
+export async function assistantRulesFor(query: string, limit = 6): Promise<AssistantRule[]> {
+  const db = await getDb();
+  const tokens = tokenize(query);
+  const { rows } = tokens.length
+    ? await db.query(
+        `SELECT * FROM assistant_rules WHERE tokens && $1 ORDER BY updated_at DESC LIMIT $2`,
+        [tokens, Math.max(1, Math.min(limit, 20))],
+      )
+    : await db.query(`SELECT * FROM assistant_rules ORDER BY updated_at DESC LIMIT $1`, [Math.max(1, Math.min(limit, 20))]);
+  return rows.map((row: any) => ({
+    id: Number(row.id),
+    body: decrypt(row.body_enc),
+    source: row.source,
+    updatedAt: isoStamp(row.updated_at),
+  }));
 }

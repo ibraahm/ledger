@@ -17,6 +17,7 @@ import { RECURRENCE_FREQUENCIES, normalizeRecurrence } from "./recurrence.js";
 export interface ToolResult {
   output: string;
   action?: ActionLabel;
+  data?: Record<string, unknown>;
 }
 
 export const toolSchemas: ToolSchema[] = [
@@ -237,6 +238,25 @@ export const toolSchemas: ToolSchema[] = [
   {
     type: "function",
     function: {
+      name: "log_contact",
+      description:
+        "Add a completed interaction to a person's or institution's encrypted contact history. Use for past contact such as called, met, emailed, spoke, or texted. Do not use this to schedule future outreach; create a task or event instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          entity: { type: "string", description: "Person, organization, partner, or agent contacted." },
+          entity_kind: { type: "string", enum: ["person", "organization", "partner", "agent"] },
+          contacted_at: { type: "string", description: "ISO date/time of the completed interaction. Omit for now." },
+          channel: { type: "string", enum: ["call", "email", "meeting", "message", "text", "other"] },
+          note: { type: "string", description: "Concise outcome, decision, or useful context from the interaction." },
+        },
+        required: ["entity", "channel"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "record_fact",
       description:
         "Attach durable knowledge to a person, organization, project, topic, or area: a lesson, preference, decision, insight, agreement, reason, or useful context. Use whenever the information belongs to a named subject.",
@@ -289,6 +309,17 @@ export const toolSchemas: ToolSchema[] = [
           country: { type: "string" },
           limit: { type: "number" },
         },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_stakeholders",
+      description: "List active people and institutions in relationship-attention order: never contacted first, then oldest contact. Use for outreach, relationship, stakeholder, and who-needs-attention questions.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string", description: "Optional name, role, organization, or relationship category." }, limit: { type: "number" } },
       },
     },
   },
@@ -456,9 +487,13 @@ function looksLikeReferencePrayerBoard(title: string, detail: unknown, location:
 }
 
 function mutationMiss(kind: string, query: unknown, matches: string[]): ToolResult {
-  if (!matches.length) return { output: `No ${kind} matched "${String(query || "")}". Ask for a different title.` };
+  if (!matches.length) return {
+    output: `No ${kind} matched "${String(query || "")}". Ask for a different title.`,
+    data: { status: "needs_clarification", record_type: kind, query: String(query || ""), missing_field: "target", candidates: [] },
+  };
   return {
     output: `More than one ${kind} matched "${String(query || "")}": ${matches.join("; ")}. Ask which one before changing anything.`,
+    data: { status: "needs_clarification", record_type: kind, query: String(query || ""), missing_field: "target", candidates: matches },
   };
 }
 
@@ -517,6 +552,7 @@ export async function runTool(
       if (vagueCommitmentTitle(args.title)) {
         return {
           output: "No task was created because the request is too vague. Ask one concise operational question for the missing action or object, such as what should be reviewed, sent, completed, or followed up.",
+          data: { status: "needs_clarification", record_type: "task", missing_field: "action_or_object", candidates: [] },
         };
       }
       const entity = await resolveEntity(args.entity, args.entity_kind as EntityKind);
@@ -526,7 +562,10 @@ export async function runTool(
       const dueTime = /^\d{2}:\d{2}$/.test(String(args.due_time || "")) ? String(args.due_time) : undefined;
       const recurrence = normalizeRecurrence(args.recurrence);
       if (recurrence !== "none" && !dueOn) {
-        return { output: "No recurring task was created because it needs a due date. Ask for the first due date." };
+        return {
+          output: "No recurring task was created because it needs a due date. Ask for the first due date.",
+          data: { status: "needs_clarification", record_type: "task", missing_field: "due_on", candidates: [] },
+        };
       }
       const owner = String(args.owner || "me").trim() || "me";
       const items = Array.isArray(args.items) ? args.items.slice(0, 100).map((item: any) => ({
@@ -557,6 +596,7 @@ export async function runTool(
           ? `Commitment #${c.id} was already open. Its details were updated: ${c.title}`
           : `${c.taskId} recorded as ${taskClass}: ${c.title}${dueOn ? ` due ${dueOn}${dueTime ? ` at ${dueTime}` : ""}` : ""}${c.waitingOn ? `; waiting on ${c.waitingOn}` : ""}${c.items.length ? ` with ${c.items.length} batch items` : ""}`,
         action: { label: `${c.duplicate ? "Task updated" : c.taskType}: ${c.title}${dueOn ? ` (${dueOn})` : ""}` },
+        data: { status: c.duplicate ? "updated" : "created", record_type: "task", record_id: c.id, title: c.title, due_on: c.dueOn, conflicts: [] },
       };
     }
 
@@ -584,6 +624,7 @@ export async function runTool(
       return {
         output: `Event #${ev.id}: ${ev.title} at ${startsAt}`,
         action: { label: `Calendar: ${ev.title} (${startsAt.replace("T", " ")})` },
+        data: { status: "created", record_type: "event", record_id: ev.id, title: ev.title, starts_at: startsAt, conflicts: [] },
       };
     }
 
@@ -618,6 +659,7 @@ export async function runTool(
       return {
         output: `Commitment updated: ${item.title}${item.dueOn ? ` due ${item.dueOn}` : ", no due date"}`,
         action: { label: `Commitment updated: ${item.title}` },
+        data: { status: "updated", record_type: "task", record_id: item.id, title: item.title, due_on: item.dueOn, conflicts: [] },
       };
     }
 
@@ -637,6 +679,7 @@ export async function runTool(
       return {
         output: `Goal updated: ${item.title}${item.targetOn ? ` target ${item.targetOn}` : ", ongoing"}`,
         action: { label: `Goal updated: ${item.title}` },
+        data: { status: "updated", record_type: "goal", record_id: item.id, title: item.title, target_on: item.targetOn, conflicts: [] },
       };
     }
 
@@ -665,6 +708,7 @@ export async function runTool(
       return {
         output: `Event updated: ${result.item.title} at ${eventTimeLabel(result.item)}`,
         action: { label: `Event updated: ${result.item.title}` },
+        data: { status: "updated", record_type: "event", record_id: result.item.id, title: result.item.title, starts_at: result.item.startsAt, conflicts: [] },
       };
     }
 
@@ -674,6 +718,7 @@ export async function runTool(
       return {
         output: `Event cancelled: ${result.item.title}`,
         action: { label: `Event cancelled: ${result.item.title}` },
+        data: { status: "cancelled", record_type: "event", record_id: result.item.id, title: result.item.title, conflicts: [] },
       };
     }
 
@@ -695,6 +740,28 @@ export async function runTool(
       return {
         output: `Entity #${e.id}: ${e.kind} "${e.name}"${e.country ? ` in ${e.country}` : ""}, ${e.status}`,
         action: { label: `${e.kind}: ${e.name}${e.status !== "active" ? ` (${e.status})` : ""}` },
+        data: { status: exact ? "matched" : "created_or_updated", record_type: "entity", record_id: e.id, title: e.name },
+      };
+    }
+
+    case "log_contact": {
+      const entity = await resolveEntity(args.entity, args.entity_kind as EntityKind);
+      if (!entity || !store.STAKEHOLDER_KINDS.includes(entity.kind as any)) {
+        return {
+          output: `No stakeholder called "${String(args.entity || "")}" is on file.`,
+          data: { status: "needs_clarification", missing_field: "entity", candidates: [] },
+        };
+      }
+      const contact = await store.addContactLog({
+        entityId: entity.id,
+        contactedAt: args.contacted_at ? String(args.contacted_at) : undefined,
+        channel: String(args.channel || "other"),
+        note: args.note ? String(args.note) : undefined,
+      });
+      return {
+        output: `Contact logged for ${entity.name}: ${contact.channel} on ${contact.contactedAt}.`,
+        action: { label: `Contact logged: ${entity.name}` },
+        data: { status: "created", record_type: "contact", record_id: contact.id, entity_id: entity.id, title: entity.name },
       };
     }
 
@@ -710,6 +777,7 @@ export async function runTool(
       return {
         output: `Fact recorded against ${entity.name}: ${args.label}`,
         action: { label: `Noted for ${entity.name}: ${args.label}` },
+        data: { status: "created", record_type: "fact", title: String(args.label || "Note"), entity_id: entity.id },
       };
     }
 
@@ -726,13 +794,17 @@ export async function runTool(
     case "get_entity": {
       const entity = await store.findEntity(String(args.name || ""), args.kind as EntityKind);
       if (!entity) return { output: `Nobody called "${args.name}" is on file yet.` };
-      const facts = await store.factsFor(entity.id, 12);
+      const detail = await store.entityDetail(entity.id);
+      const facts = detail?.facts || [];
       const meta = Object.keys(entity.meta).length ? `\nDetails: ${JSON.stringify(entity.meta)}` : "";
       const body = facts.length
         ? facts.map((f) => `- ${f.label} (${String(f.createdAt).slice(0, 10)}): ${f.body.slice(0, 400)}`).join("\n")
         : "No facts recorded yet.";
+      const contacts = detail?.contacts?.length
+        ? `\n\nRecent contact:\n${detail.contacts.slice(0, 6).map((contact) => `- ${contact.contactedAt.slice(0, 10)} ${contact.channel}${contact.note ? `: ${contact.note.slice(0, 300)}` : ""}`).join("\n")}`
+        : store.STAKEHOLDER_KINDS.includes(entity.kind as any) ? "\n\nRecent contact: never logged." : "";
       return {
-        output: `${entity.name}: ${entity.kind}, ${entity.status}${entity.country ? `, ${entity.country}` : ""}${meta}\n\n${body}`,
+        output: `${entity.name}: ${entity.kind}, ${entity.status}${entity.country ? `, ${entity.country}` : ""}${meta}\n\n${body}${contacts}`,
       };
     }
 
@@ -747,6 +819,17 @@ export async function runTool(
         output: list
           .map((e) => `- ${e.name} (${e.kind}, ${e.status}${e.country ? `, ${e.country}` : ""})`)
           .join("\n"),
+      };
+    }
+
+    case "list_stakeholders": {
+      const people = await store.listStakeholders(String(args.query || ""), Number(args.limit) || 40);
+      if (!people.length) return { output: "No stakeholders match that." };
+      return {
+        output: people.map((person) => {
+          const role = person.meta.role || person.meta.category || person.meta.relationship || person.kind;
+          return `- ${person.name} (${role}); ${person.lastContactAt ? `last contact ${person.lastContactAt.slice(0, 10)}` : "never contacted"}; ${person.contactCount} logged`;
+        }).join("\n"),
       };
     }
 
@@ -827,6 +910,7 @@ export async function runTool(
       return {
         output: `Closed: ${result.item.title}${result.item.nextDueOn ? `. Next occurrence: ${result.item.nextDueOn}.` : ""}`,
         action: { label: `Done: ${result.item.title}` },
+        data: { status: "completed", record_type: "task", record_id: result.item.id, title: result.item.title, next_due_on: result.item.nextDueOn },
       };
     }
 
@@ -843,7 +927,11 @@ export async function runTool(
     case "archive_goal": {
       const result = await store.archiveMatchingGoal(String(args.query || ""));
       if (!result.item) return mutationMiss("active goal", args.query, result.matches);
-      return { output: `Goal archived: ${result.item.title}`, action: { label: `Goal archived: ${result.item.title}` } };
+      return {
+        output: `Goal archived: ${result.item.title}`,
+        action: { label: `Goal archived: ${result.item.title}` },
+        data: { status: "archived", record_type: "goal", record_id: result.item.id, title: result.item.title },
+      };
     }
 
     default:

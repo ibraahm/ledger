@@ -6,11 +6,12 @@ import { getDb, withTransaction } from "./db.js";
 
 const MAGIC = Buffer.from("LEDGER-BACKUP-1\n", "utf8");
 const TABLES = [
-  "schema_migrations", "entries", "entities", "messages", "commitments", "commitment_items",
-  "goals", "events", "facts", "action_runs", "action_steps", "action_changes",
+  "schema_migrations", "entries", "entities", "entity_contacts", "messages", "commitments", "commitment_items",
+  "goals", "events", "facts", "action_runs", "action_steps", "action_changes", "assistant_state", "assistant_rules",
 ] as const;
+const OPTIONAL_LEGACY_TABLES = new Set<string>(["assistant_state", "assistant_rules", "entity_contacts"]);
 const DELETE_ORDER = [
-  "action_changes", "action_steps", "action_runs", "commitment_items", "facts", "events",
+  "assistant_rules", "assistant_state", "action_changes", "action_steps", "action_runs", "commitment_items", "facts", "events", "entity_contacts",
   "goals", "commitments", "messages", "entities", "entries", "schema_migrations",
 ] as const;
 const FILE_PATTERN = /^ledger-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.lgr$/;
@@ -64,7 +65,7 @@ export async function createEncryptedBackup(): Promise<{ name: string; size: num
   const createdAt = new Date().toISOString();
   const payload: BackupPayload = { format: 1, createdAt, storage: db.kind, tables: {} };
   for (const table of TABLES) {
-    const orderColumn = table === "schema_migrations" ? "version" : "id";
+    const orderColumn = table === "schema_migrations" ? "version" : table === "assistant_state" ? "key" : "id";
     const { rows } = await db.query<{ row: Record<string, any> }>(`SELECT row_to_json(t) AS row FROM ${table} t ORDER BY ${orderColumn}`);
     payload.tables[table] = rows.map(({ row }) => row);
   }
@@ -112,7 +113,12 @@ async function insertRow(table: string, row: Record<string, any>): Promise<void>
 export async function restoreEncryptedBackup(name: string): Promise<{ restoredAt: string; records: number }> {
   const input = fs.readFileSync(encryptedBackupFile(name));
   const payload = decryptPayload(input);
-  for (const table of TABLES) if (!Array.isArray(payload.tables[table])) throw new Error(`Backup is missing ${table}.`);
+  for (const table of TABLES) {
+    if (!Array.isArray(payload.tables[table])) {
+      if (OPTIONAL_LEGACY_TABLES.has(table)) payload.tables[table] = [];
+      else throw new Error(`Backup is missing ${table}.`);
+    }
+  }
   return withTransaction(async () => {
     const db = await getDb();
     for (const table of DELETE_ORDER) await db.query(`DELETE FROM ${table}`);
@@ -123,7 +129,7 @@ export async function restoreEncryptedBackup(name: string): Promise<{ restoredAt
         records += 1;
       }
     }
-    for (const table of TABLES.filter((table) => table !== "schema_migrations")) {
+    for (const table of TABLES.filter((table) => table !== "schema_migrations" && table !== "assistant_state")) {
       await db.query(
         `SELECT setval(pg_get_serial_sequence('${table}', 'id'), GREATEST(COALESCE(MAX(id), 0), 1), COALESCE(MAX(id), 0) > 0) FROM ${table}`,
       );

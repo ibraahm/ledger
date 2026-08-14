@@ -8,7 +8,7 @@ import {
 } from "./config.js";
 import { respond, retryEntry, startProcessingQueue } from "./agent.js";
 import { hashPassword, randomHex, signSession, verifyPassword, verifySession } from "./crypto.js";
-import { getDb } from "./db.js";
+import { getDb, withTransaction } from "./db.js";
 import * as store from "./store.js";
 import { syncVault, type VaultSyncResult } from "./vault.js";
 import { buildCalendarIcs } from "./calendar.js";
@@ -493,6 +493,8 @@ async function main() {
   });
 
   app.put("/api/task/:id", authed, async (req, res) => {
+    const originalTask = await store.commitmentDetail(Number(req.params.id));
+    if (!originalTask) return res.status(404).json({ error: "Open task not found." });
     const title = String(req.body?.title || "").trim();
     const dueOn = req.body?.dueOn === null || req.body?.dueOn === "" ? null : String(req.body?.dueOn || "");
     const dueTime = req.body?.dueTime === null || req.body?.dueTime === "" ? null : String(req.body?.dueTime || "");
@@ -518,17 +520,28 @@ async function main() {
     }
     let task;
     try {
-      task = await store.updateCommitmentById(Number(req.params.id), {
-        title,
-        detail: String(req.body?.detail || ""),
-        dueOn,
-        dueTime,
-        priority,
-        taskType,
-        goalArea,
-        recurrence,
-        owner: String(req.body?.owner || "me"),
-        framework: sanitizeTaskFramework(taskType, req.body?.framework),
+      task = await withTransaction(async () => {
+        const updated = await store.updateCommitmentById(Number(req.params.id), {
+          title,
+          detail: String(req.body?.detail || ""),
+          dueOn,
+          dueTime,
+          priority,
+          taskType,
+          goalArea,
+          recurrence,
+          owner: String(req.body?.owner || "me"),
+          framework: sanitizeTaskFramework(taskType, req.body?.framework),
+        });
+        if (!updated) return null;
+        const corrections = [
+          originalTask.goalArea !== updated.goalArea ? `use Goal Area "${updated.goalArea}"` : "",
+          originalTask.taskType !== updated.taskType ? `use Task Type "${updated.taskType}"` : "",
+        ].filter(Boolean);
+        if (corrections.length) {
+          await store.saveAssistantRule(`For the task "${updated.title}", ${corrections.join(" and ")}.`, "manual-task-edit");
+        }
+        return updated;
       });
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : "Could not update task." });
@@ -688,6 +701,25 @@ async function main() {
         Number(req.query.limit) || 100,
       ),
     );
+  });
+
+  app.get("/api/stakeholders", authed, async (req, res) => {
+    res.json(await store.listStakeholders(String(req.query.q || ""), Number(req.query.limit) || 200));
+  });
+
+  app.post("/api/stakeholders/:id/contacts", authed, async (req, res) => {
+    const entityId = Number(req.params.id);
+    if (!Number.isSafeInteger(entityId) || entityId < 1) return res.status(400).json({ error: "Invalid stakeholder ID." });
+    try {
+      res.status(201).json(await store.addContactLog({
+        entityId,
+        contactedAt: req.body?.contactedAt ? String(req.body.contactedAt) : undefined,
+        channel: req.body?.channel ? String(req.body.channel) : undefined,
+        note: req.body?.note ? String(req.body.note) : undefined,
+      }));
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
   });
 
   app.get("/api/entity/:id", authed, async (req, res) => {

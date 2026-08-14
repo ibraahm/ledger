@@ -15,6 +15,7 @@ const memoryResultsTitle = document.getElementById("memoryResultsTitle");
 const memoryResultCount = document.getElementById("memoryResultCount");
 const memoryDetail = document.getElementById("memoryDetail");
 const recentMemory = document.getElementById("recentMemory");
+const peopleMemory = document.getElementById("peopleMemory");
 const reviewMemory = document.getElementById("reviewMemory");
 const pendingCount = document.getElementById("pendingCount");
 const calendarConnectDialog = document.getElementById("calendarConnectDialog");
@@ -719,7 +720,7 @@ function setCaptureStatus(card, text, tone = "saved") {
   status.dataset.tone = tone;
 }
 
-function addMessage({ id, role, content, actions = [], at, status }) {
+function addMessage({ id, role, content, actions = [], steps = [], at, status }) {
   stream.querySelector(".empty")?.remove();
   const isUser = role === "user";
   const card = el("article", `msg msg--${isUser ? "you" : "ledger"}`);
@@ -729,6 +730,19 @@ function addMessage({ id, role, content, actions = [], at, status }) {
   if (at) tools.append(el("time", "msg__time", at.slice(11, 16)));
   header.append(tools);
   card.append(header, el("div", "msg__text", content));
+
+  if (!isUser && steps.length) {
+    const trace = el("details", "decision-steps");
+    const summary = el("summary", null, "Checks Ledger performed");
+    const list = el("ol", "decision-steps__list");
+    for (const step of steps) {
+      const item = el("li", null, step.label);
+      if (step.detail) item.append(el("span", null, step.detail));
+      list.append(item);
+    }
+    trace.append(summary, list);
+    card.append(trace);
+  }
 
   if (actions.length) {
     const strip = el("div", "stamps");
@@ -794,6 +808,7 @@ const memoryKindLabels = {
   event: "Event",
 };
 let currentMemoryHit = null;
+let memoryMode = "recent";
 
 function readableDate(value) {
   if (!value) return "";
@@ -803,8 +818,55 @@ function readableDate(value) {
 }
 
 function setMemoryFilter(mode) {
+  memoryMode = mode;
   recentMemory.classList.toggle("is-on", mode === "recent");
+  peopleMemory.classList.toggle("is-on", mode === "people");
   reviewMemory.classList.toggle("is-on", mode === "review");
+}
+
+function contactState(value) {
+  if (!value) return { kind: "stale", label: "Never contacted" };
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { kind: "stale", label: "Contact date unknown" };
+  const days = Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
+  const age = days === 0 ? "Today" : days === 1 ? "1 day ago" : days < 30 ? `${days} days ago` : `${Math.floor(days / 30)} months ago`;
+  if (days < 14) return { kind: "fresh", label: age };
+  if (days < 45) return { kind: "warm", label: age };
+  return { kind: "stale", label: age };
+}
+
+function stakeholderButton(person) {
+  const button = el("button", `memory-hit stakeholder-hit stakeholder-hit--${contactState(person.lastContactAt).kind}`);
+  button.type = "button";
+  const state = contactState(person.lastContactAt);
+  const top = el("span", "memory-hit__top");
+  top.append(el("span", null, person.kind === "organization" ? "Institution" : "Stakeholder"), el("span", `contact-age contact-age--${state.kind}`, state.label));
+  const role = person.meta?.role || person.meta?.category || person.meta?.relationship || "";
+  const organization = person.meta?.organization || "";
+  button.append(top, el("strong", null, person.name));
+  if (role || organization) button.append(el("span", "memory-hit__body", [role, organization].filter(Boolean).join(" / ")));
+  button.append(el("span", "memory-hit__context", `${person.contactCount} ${person.contactCount === 1 ? "contact" : "contacts"} logged`));
+  const hit = { kind: "entity", id: person.id, title: person.name, createdAt: person.createdAt, stakeholder: true };
+  button.addEventListener("click", () => openMemoryHit(hit, button));
+  return button;
+}
+
+async function loadPeople(query = "") {
+  setMemoryFilter("people");
+  memoryResultsTitle.textContent = query ? `People matching “${query}”` : "Stakeholders · stalest first";
+  renderMemoryLoading();
+  try {
+    const response = await fetch(`/api/stakeholders?q=${encodeURIComponent(query)}`);
+    if (response.status === 401) return (location.href = "/");
+    if (!response.ok) throw new Error("Could not load the stakeholder ledger.");
+    const people = await response.json();
+    memoryResults.textContent = "";
+    memoryResultCount.textContent = String(people.length);
+    if (!people.length) return renderMemoryEmpty("No stakeholders yet", "Tell Ledger about a person, organization, partner, or agent. They will appear here automatically.");
+    for (const person of people) memoryResults.append(stakeholderButton(person));
+  } catch (error) {
+    renderMemoryEmpty("People are unavailable", error.message);
+  }
 }
 
 function renderMemoryLoading() {
@@ -989,9 +1051,78 @@ function editableFact(fact, reload) {
 function renderEntityDetail(data) {
   memoryDetail.textContent = "";
   const { entity } = data;
-  memoryDetail.append(detailHeading(entity.kind, entity.name, [entity.status, entity.country].filter(Boolean).join(" / ")));
+  const role = entity.meta?.role || entity.meta?.category || entity.meta?.relationship || "";
+  const organization = entity.meta?.organization || "";
+  const relationship = contactState(entity.lastContactAt);
+  memoryDetail.append(detailHeading(entity.kind, entity.name, [role, organization, entity.status, entity.country].filter(Boolean).join(" / ")));
   if (entity.notes) memoryDetail.append(el("p", "memory-detail__summary", entity.notes));
   const reload = () => openMemoryHit(currentMemoryHit);
+  if (["person", "organization", "partner", "agent"].includes(entity.kind)) {
+    const relationshipPanel = el("section", "relationship-panel");
+    const relationshipHead = el("div", "relationship-panel__head");
+    const relationshipTitle = el("div");
+    relationshipTitle.append(el("h4", null, "Contact log"), el("p", null, `${relationship.label} · ${data.contacts?.length || 0} logged`));
+    relationshipHead.append(relationshipTitle);
+    relationshipPanel.append(relationshipHead);
+
+    const contactForm = el("form", "contact-form");
+    const channelLabel = el("label");
+    channelLabel.append(el("span", null, "Channel"));
+    const channel = el("select");
+    for (const value of ["call", "email", "meeting", "message", "text", "other"]) {
+      const option = el("option", null, value[0].toUpperCase() + value.slice(1));
+      option.value = value;
+      channel.append(option);
+    }
+    channelLabel.append(channel);
+    const whenLabel = el("label");
+    whenLabel.append(el("span", null, "When"));
+    const when = el("input");
+    when.type = "datetime-local";
+    const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    when.value = now.toISOString().slice(0, 16);
+    whenLabel.append(when);
+    const noteLabel = el("label", "contact-form__note");
+    noteLabel.append(el("span", null, "Outcome or context"));
+    const note = el("textarea");
+    note.rows = 2;
+    note.placeholder = "What was discussed, decided, or promised?";
+    noteLabel.append(note);
+    const submit = el("button", "memory-detail__primary", "Log contact");
+    submit.type = "submit";
+    contactForm.append(channelLabel, whenLabel, noteLabel, submit);
+    contactForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      const response = await fetch(`/api/stakeholders/${entity.id}/contacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ channel: channel.value, contactedAt: new Date(when.value).toISOString(), note: note.value }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        submit.disabled = false;
+        return showBanner(result.error || "Could not log that contact.", "error");
+      }
+      showBanner(`Contact with ${entity.name} logged.`);
+      await openMemoryHit(currentMemoryHit);
+      if (memoryMode === "people") await loadPeople(memorySearch.value.trim());
+    });
+    relationshipPanel.append(contactForm);
+    if (data.contacts?.length) {
+      const timeline = el("div", "contact-timeline");
+      for (const contact of data.contacts) {
+        const item = el("article", "contact-entry");
+        item.append(el("strong", null, contact.channel), el("time", null, new Date(contact.contactedAt).toLocaleString()));
+        if (contact.note) item.append(el("p", null, contact.note));
+        timeline.append(item);
+      }
+      relationshipPanel.append(timeline);
+    } else {
+      relationshipPanel.append(el("p", "contact-timeline__empty", "No contact has been logged yet."));
+    }
+    memoryDetail.append(relationshipPanel);
+  }
   const sections = [
     detailSection("Knowledge", data.facts, (fact) => editableFact(fact, reload)),
     detailSection("Tasks and promises", data.tasks, (task) => compactRecord(task.title, task.detail, [task.status, task.dueOn].filter(Boolean).join(" / "))),
@@ -1119,11 +1250,16 @@ async function openMemoryHit(hit, selectedButton) {
 
 memorySearchForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  loadMemory(memorySearch.value.trim());
+  if (memoryMode === "people") loadPeople(memorySearch.value.trim());
+  else loadMemory(memorySearch.value.trim());
 });
 recentMemory.addEventListener("click", () => {
   memorySearch.value = "";
   loadMemory();
+});
+peopleMemory.addEventListener("click", () => {
+  memorySearch.value = "";
+  loadPeople();
 });
 reviewMemory.addEventListener("click", loadInbox);
 
@@ -2303,7 +2439,13 @@ form.addEventListener("submit", async (event) => {
   send.disabled = true;
   send.textContent = "Working";
 
-  const pending = el("div", "thinking", "Checking memory and carrying that out");
+  const workingLabels = ["Finding relevant memory", "Checking Feed and Calendar", "Validating the next action"];
+  let workingIndex = 0;
+  const pending = el("div", "thinking", workingLabels[workingIndex]);
+  const workingTimer = setInterval(() => {
+    workingIndex = (workingIndex + 1) % workingLabels.length;
+    pending.textContent = workingLabels[workingIndex];
+  }, 1200);
   stream.append(pending);
   stream.scrollTop = stream.scrollHeight;
 
@@ -2314,6 +2456,7 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ message: text }),
     });
     const data = await response.json();
+    clearInterval(workingTimer);
     pending.remove();
     if (!response.ok) {
       attachDeleteControl(userCard, data.userMessageId);
@@ -2323,12 +2466,13 @@ form.addEventListener("submit", async (event) => {
     } else {
       attachDeleteControl(userCard, data.userMessageId);
       setCaptureStatus(userCard, "Done", "filed");
-      addMessage({ id: data.assistantMessageId, role: "assistant", content: data.reply, actions: data.actions });
+      addMessage({ id: data.assistantMessageId, role: "assistant", content: data.reply, actions: data.actions, steps: data.steps });
       memoryLoaded = false;
       refreshPendingCount();
     }
     refresh();
   } catch {
+    clearInterval(workingTimer);
     pending.remove();
     setCaptureStatus(userCard, "Check inbox", "review");
     addError("The connection stopped while Ledger was working. Your message remains saved.");

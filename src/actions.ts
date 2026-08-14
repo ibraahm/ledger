@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { getDb, withTransaction } from "./db.js";
 
-const TRACKED_TABLES = ["entities", "facts", "commitments", "commitment_items", "goals", "events"] as const;
+const TRACKED_TABLES = ["entities", "entity_contacts", "facts", "commitments", "commitment_items", "goals", "events"] as const;
 type TrackedTable = (typeof TRACKED_TABLES)[number];
 type Row = Record<string, any>;
 export type ActionLabel = { label: string; undoRunId?: number };
@@ -9,6 +9,7 @@ export type ActionLabel = { label: string; undoRunId?: number };
 export interface StoredToolResult {
   output: string;
   action?: ActionLabel;
+  data?: Record<string, unknown>;
 }
 
 export interface DataSnapshot {
@@ -163,8 +164,8 @@ async function restoreActionRun(runId: number, mode: "undo" | "rollback"): Promi
     const inserted = rows.filter((change) => !change.before_row && change.after_row);
     const deleted = rows.filter((change) => change.before_row && !change.after_row);
     const updated = rows.filter((change) => change.before_row && change.after_row);
-    const childFirst: TrackedTable[] = ["facts", "commitment_items", "commitments", "goals", "events", "entities"];
-    const parentFirst: TrackedTable[] = ["entities", "commitments", "commitment_items", "facts", "goals", "events"];
+    const childFirst: TrackedTable[] = ["entity_contacts", "facts", "commitment_items", "commitments", "goals", "events", "entities"];
+    const parentFirst: TrackedTable[] = ["entities", "entity_contacts", "commitments", "commitment_items", "facts", "goals", "events"];
 
     for (const table of childFirst) {
       for (const change of inserted.filter((item) => item.table_name === table)) {

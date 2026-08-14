@@ -4,6 +4,10 @@ Encrypted private memory for one person. Dump personal or professional thoughts 
 
 Built to help you remember, learn, grow, follow through, and keep work and life connected without forcing you to organize every thought first.
 
+## People and relationships
+
+Memory → People is a stakeholder ledger built from Ledger's existing person, organization, partner, and agent records. It sorts people who have never been contacted first, then the oldest contact, so neglected relationships are visible without a separate database. Open a stakeholder to log a call, email, meeting, message, or text; contact notes are encrypted and included in encrypted backups. You can also tell chat, “I called Dana and she approved the filing,” to add the completed interaction.
+
 ## Setup
 
 ```bash
@@ -125,6 +129,12 @@ Every raw dump is also stored verbatim as an `entry` before the model runs, so n
 The first screen is an action-oriented chat. Tell Ledger to remember context, plan the day, create or rename a task, change a due date or priority, reschedule or cancel an event, finish a commitment, update a goal, archive a goal, or review what needs attention. Every task receives one Goal Area (`company`, `digital`, `compliance`, `agents`, `partners`, `banking`, `growth`, `team`, `personal_finance`, or `personal_health_family`) and one task type (`call`, `email`, `text`, `meeting`, `follow_up`, `review`, `approve`, `research`, `prepare`, `delegate`, `recap`, `decision`, `document`, `reminder`, or `personal`). New goals are created only through the manual form in **Feed > Goals**. Confirmed mutations appear below the reply as **Changes made**. Every mutation batch is validated and executed in a database transaction. Repeated tool calls use an idempotency key, failed runs reverse earlier changes, and completed runs have one **Undo changes** control.
 
 Ledger changes an existing record instead of creating a replacement. If a title matches more than one task, goal, or event, it changes nothing and asks which record you meant.
+
+Before each reply, Ledger builds a bounded Context Pack from relevant encrypted memory, related tasks, goals, people, and calendar records. Mutating instructions receive an automatic read-only consistency review, and the model sees no more than six relevant tools. This retrieval and routing are deterministic and do not require a separate classifier or semantic model call.
+
+If Ledger asks a necessary operational question, it saves that pending clarification encrypted. A short answer such as “the Dana task” or “Friday” resumes the original instruction instead of becoming an unrelated note. Manual corrections to a task's Goal Area or Task Type are stored as narrow encrypted filing rules and reused only when a future instruction matches.
+
+Assistant replies include a collapsed **Checks Ledger performed** trace. It reports verifiable stages—memory searched, conflicts reviewed, records checked, and changes committed—without exposing private model chain-of-thought.
 
 To remove every commitment and calendar event, ask Ledger to clear the Feed and Calendar, review the stated scope, then send exactly `CLEAR FEED AND CALENDAR`. Goals, memory, source notes, and chat remain. Ledger reports the deleted counts and provides one undo action.
 

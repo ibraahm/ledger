@@ -25,6 +25,7 @@ const prayer = await import("../src/prayer.js");
 const ledgerTools = await import("../src/tools.js");
 const taskFramework = await import("../src/task-framework.js");
 const recurrence = await import("../src/recurrence.js");
+const agent = await import("../src/agent.js");
 
 after(async () => {
   const db = await dbModule.getDb();
@@ -35,10 +36,122 @@ after(async () => {
 test("versioned migrations run once and include current schema", async () => {
   const db = await dbModule.getDb();
   const first = await db.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   await dbModule.getDb();
   const second = await db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM schema_migrations");
-  assert.equal(Number(second.rows[0].count), 9);
+  assert.equal(Number(second.rows[0].count), 11);
+});
+
+test("chat routing exposes no more than six relevant tools", () => {
+  const taskTools = agent.routedToolNames("Move the Dana compliance task to Friday");
+  assert.ok(taskTools.includes("update_commitment"));
+  assert.ok(!taskTools.includes("add_event"));
+  assert.ok(taskTools.length <= 6);
+  assert.ok(agent.routedToolNames("Change the goal area for the agent DD task").includes("update_commitment"));
+  assert.ok(agent.routedToolNames("Cancel my meeting with Dana").includes("cancel_event"));
+  assert.deepEqual(agent.routedToolNames("What do I know about Dana?"), ["search", "get_entity", "list_entities"]);
+  assert.deepEqual(agent.routedToolNames("Dana prefers email updates"), ["search", "get_entity", "record_fact", "upsert_entity"]);
+  assert.ok(agent.routedToolNames("I called Dana and she approved the filing").includes("log_contact"));
+  assert.ok(agent.routedToolNames("Which stakeholders have I not contacted?").includes("list_stakeholders"));
+  assert.deepEqual(agent.routedToolNames("What time is Fajr?"), ["get_prayer_times"]);
+  assert.deepEqual(agent.contextTerms("Please move the Dana compliance task to Friday"), ["compliance", "friday", "dana"]);
+});
+
+test("chat routing evaluation covers realistic Ledger instructions", () => {
+  const cases: Array<[string, string]> = [
+    ["Send the report to Dana tomorrow", "add_commitment"],
+    ["Call John on Friday", "add_commitment"],
+    ["Email the payout proposal to Zenith", "add_commitment"],
+    ["Text Maya about the reading list", "add_commitment"],
+    ["Follow up with the bank next week", "add_commitment"],
+    ["Review the vendor agreement", "add_commitment"],
+    ["Approve the agent file", "add_commitment"],
+    ["Research banking providers", "add_commitment"],
+    ["Prepare the Texas exam evidence", "add_commitment"],
+    ["Delegate the portal review to Sam", "add_commitment"],
+    ["Document the onboarding process", "add_commitment"],
+    ["Remind me to renew the license", "add_commitment"],
+    ["Move the Dana task to Friday", "update_commitment"],
+    ["Change the task priority to high", "update_commitment"],
+    ["Rename the compliance commitment", "update_commitment"],
+    ["Reschedule the follow up to Monday", "update_commitment"],
+    ["Close the Dana task", "close_commitment"],
+    ["The evidence task is done", "close_commitment"],
+    ["Complete it", "close_commitment"],
+    ["Schedule a meeting with Dana Friday at 10", "add_event"],
+    ["Add an event for the state exam", "add_event"],
+    ["Appointment with the bank tomorrow", "add_event"],
+    ["Schedule a call with John", "add_event"],
+    ["Move the calendar event to Tuesday", "update_event"],
+    ["Change the appointment to 3 PM", "update_event"],
+    ["Reschedule the meeting to Friday", "update_event"],
+    ["Cancel my meeting with Dana", "cancel_event"],
+    ["Delete the calendar event", "cancel_event"],
+    ["Remove the bank appointment", "cancel_event"],
+    ["Show my active goals", "list_goals"],
+    ["Archive the growth goal", "archive_goal"],
+    ["Change the compliance goal target", "update_goal"],
+    ["Rename the growth goal", "update_goal"],
+    ["What are my goals?", "list_goals"],
+    ["Review my active goals", "list_goals"],
+    ["What did John agree to?", "search"],
+    ["Who is Dana?", "get_entity"],
+    ["Tell me about Zenith", "search"],
+    ["Remember that Dana prefers email", "record_fact"],
+    ["Note that John approved the proposal", "record_fact"],
+    ["Dana prefers email updates", "record_fact"],
+    ["I met Maya at the conference", "record_fact"],
+    ["Plan my day", "get_agenda"],
+    ["What needs my attention?", "review_consistency"],
+    ["Run my weekly review", "review_consistency"],
+    ["Review progress and risks", "review_consistency"],
+    ["Find inconsistencies in my calendar", "review_consistency"],
+    ["Show overdue tasks", "get_agenda"],
+    ["List waiting commitments", "get_agenda"],
+    ["What tasks are due?", "get_agenda"],
+    ["What time is Fajr?", "get_prayer_times"],
+    ["Fetch today's prayer times", "get_prayer_times"],
+    ["Clear all Feed tasks and Calendar events", "clear_feed_and_calendar"],
+    ["Delete all tasks", "clear_feed_and_calendar"],
+    ["How can I improve the compliance process?", "search"],
+  ];
+  assert.ok(cases.length >= 50);
+  for (const [message, expected] of cases) {
+    const tools = agent.routedToolNames(message);
+    assert.ok(tools.includes(expected), `${message} should include ${expected}; received ${tools.join(", ")}`);
+    assert.ok(tools.length >= 1 && tools.length <= 6, `${message} exposed ${tools.length} tools`);
+  }
+});
+
+test("clarifications decision steps and correction rules persist encrypted", async () => {
+  const marker = `Dana correction ${crypto.randomBytes(4).toString("hex")}`;
+  await store.setPendingClarification({
+    operation: "update_commitment",
+    originalInstruction: `Move ${marker}`,
+    question: "Which task?",
+    missingField: "target",
+    candidates: ["Dana review", "Dana filing"],
+    createdAt: new Date().toISOString(),
+  });
+  assert.equal((await store.getPendingClarification())?.question, "Which task?");
+  await store.saveAssistantRule(`For ${marker}, use Goal Area agents.`, "test-correction");
+  assert.ok((await store.assistantRulesFor(marker)).some((rule) => rule.body.includes(marker)));
+  const messageId = await store.addMessage("assistant", "I checked the records.", [], [
+    { label: "Searched connected memory", detail: "Two records found" },
+  ]);
+  assert.ok((await store.recentMessages(20)).some((message) => message.id === messageId && message.steps.length === 1));
+  const db = await dbModule.getDb();
+  const state = await db.query<any>("SELECT value_enc FROM assistant_state WHERE key = 'pending_clarification'");
+  const rule = await db.query<any>("SELECT body_enc FROM assistant_rules WHERE source = 'test-correction'");
+  assert.ok(!String(state.rows[0].value_enc).includes(marker));
+  assert.ok(!String(rule.rows[0].body_enc).includes(marker));
+  await store.clearPendingClarification();
+});
+
+test("tool misses return structured clarification data", async () => {
+  const result = await ledgerTools.runTool("update_commitment", { query: "definitely-not-a-ledger-task" }, null);
+  assert.equal(result.data?.status, "needs_clarification");
+  assert.equal(result.data?.missing_field, "target");
 });
 
 test("captured text is encrypted at rest and decrypts through the store", async () => {
@@ -48,6 +161,28 @@ test("captured text is encrypted at rest and decrypts through the store", async 
   const raw = await db.query<any>("SELECT body_enc FROM entries WHERE id = $1", [id]);
   assert.ok(!raw.rows[0].body_enc.includes(phrase));
   assert.equal((await store.getEntry(id))?.body, phrase);
+});
+
+test("stakeholder ledger is stalest-first and encrypts contact notes", async () => {
+  const marker = crypto.randomBytes(4).toString("hex");
+  const never = await store.upsertEntity({ kind: "person", name: `Never Contacted ${marker}`, meta: { role: "Counsel" } });
+  const older = await store.upsertEntity({ kind: "organization", name: `Older Institution ${marker}`, meta: { category: "bank" } });
+  const newer = await store.upsertEntity({ kind: "partner", name: `Newer Partner ${marker}` });
+  const secret = `approved confidential terms ${marker}`;
+  await store.addContactLog({ entityId: newer.id, contactedAt: "2026-08-12T15:00:00.000Z", channel: "call", note: secret });
+  await store.addContactLog({ entityId: older.id, contactedAt: "2026-07-01T15:00:00.000Z", channel: "email", note: "Older touch" });
+
+  const people = (await store.listStakeholders(marker)).map((person) => person.id);
+  assert.deepEqual(people, [never.id, older.id, newer.id]);
+  const detail = await store.entityDetail(newer.id);
+  assert.equal(detail?.contacts[0].note, secret);
+  assert.equal(detail?.entity.lastContactAt, "2026-08-12T15:00:00.000Z");
+  const db = await dbModule.getDb();
+  const raw = await db.query<any>("SELECT note_enc FROM entity_contacts WHERE entity_id = $1", [newer.id]);
+  assert.ok(!String(raw.rows[0].note_enc).includes(secret));
+
+  await store.addContactLog({ entityId: newer.id, contactedAt: "2026-06-01T15:00:00.000Z", channel: "meeting" });
+  assert.equal((await store.entityDetail(newer.id))?.entity.lastContactAt, "2026-08-12T15:00:00.000Z");
 });
 
 test("transactions roll back every mutation when one operation fails", async () => {
