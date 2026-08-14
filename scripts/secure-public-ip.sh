@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LEDGER_IP="${LEDGER_IP:-129.121.99.71}"
+LEDGER_IP="${LEDGER_IP:-}"
 LEDGER_DIR="${LEDGER_DIR:-/opt/ledger}"
 ACME_ROOT="/var/www/letsencrypt"
 NGINX_SITE="/etc/nginx/sites-available/ledger"
@@ -11,10 +11,22 @@ if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this script as root."
   exit 1
 fi
+if [[ -z "${LEDGER_IP}" ]]; then
+  echo "Set LEDGER_IP to the public IPv4 address assigned exclusively to this Ledger server."
+  echo "Example: sudo LEDGER_IP=203.0.113.10 LETSENCRYPT_EMAIL=you@example.com bash scripts/secure-public-ip.sh"
+  exit 1
+fi
 if [[ ! "${LEDGER_IP}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
   echo "LEDGER_IP must be a public IPv4 address."
   exit 1
 fi
+IFS=. read -r -a LEDGER_IP_OCTETS <<< "${LEDGER_IP}"
+for octet in "${LEDGER_IP_OCTETS[@]}"; do
+  if (( 10#${octet} > 255 )); then
+    echo "LEDGER_IP must be a valid public IPv4 address."
+    exit 1
+  fi
+done
 if [[ ! -f "${LEDGER_DIR}/.env" || ! -f "${LEDGER_DIR}/ecosystem.config.cjs" ]]; then
   echo "Ledger was not found at ${LEDGER_DIR}."
   exit 1

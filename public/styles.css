@@ -1964,6 +1964,21 @@ select:disabled {
   min-width: 0;
 }
 
+.goal-item > .row {
+  border-bottom: 1px solid var(--line);
+}
+
+.goal-item:last-child > .row {
+  border-bottom: 0;
+}
+
+.goal__actions {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.goal__edit,
 .goal__archive {
   flex: none;
   padding: 6px 8px;
@@ -1975,10 +1990,45 @@ select:disabled {
   font-weight: 700;
 }
 
+.goal__edit:hover,
 .goal__archive:hover {
   background: var(--surface-tint);
   color: var(--ink);
   border-color: var(--line-strong);
+}
+
+.goal-edit {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0 20px 68px;
+  border-bottom: 1px solid var(--line);
+}
+
+.goal-edit__fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.35fr) minmax(180px, 1.35fr) minmax(132px, 0.85fr) minmax(132px, 0.75fr) minmax(104px, 0.55fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.goal-edit__fields .settings__input {
+  margin-top: 6px;
+  font-weight: 400;
+}
+
+.goal-edit__fields textarea.settings__input {
+  min-height: 44px;
+  resize: vertical;
+}
+
+.goal-edit > .settings__error {
+  margin: 0;
+}
+
+.goal-edit__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .row--archived {
@@ -2743,6 +2793,10 @@ select:disabled {
     grid-template-columns: 1fr 1fr;
   }
 
+  .goal-edit__fields {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .goal-create__form .settings__save {
     width: 100%;
   }
@@ -2763,6 +2817,38 @@ select:disabled {
 
   .goal-create__form {
     grid-template-columns: 1fr;
+  }
+
+  .row--goal .row__what {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .goal__actions {
+    width: 100%;
+  }
+
+  .goal__edit,
+  .goal__archive {
+    min-height: 38px;
+    flex: 1;
+  }
+
+  .goal-edit {
+    padding: 14px 0 18px;
+  }
+
+  .goal-edit__fields {
+    grid-template-columns: 1fr;
+  }
+
+  .goal-edit__actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .goal-edit__actions button {
+    width: 100%;
   }
 }
 
@@ -3156,6 +3242,10 @@ a:active {
     font-size: 13px;
   }
 
+  .view-head--feed {
+    padding-bottom: 14px;
+  }
+
   .memory-view {
     display: block;
     overflow-y: auto;
@@ -3209,6 +3299,12 @@ a:active {
   .calendar-toolbar {
     display: grid;
     gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .calendar-title {
+    font-size: 23px;
+    line-height: 1.15;
   }
 
   .calendar-controls {
@@ -3223,6 +3319,14 @@ a:active {
   .calendar-actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .calendar-action,
+  .calendar-add,
+  .calendar-export {
+    min-width: 0;
+    padding-inline: 8px;
   }
 
   .calendar-export {
@@ -3237,16 +3341,68 @@ a:active {
   }
 
   .calendar-scroll {
-    scroll-snap-type: x proximity;
+    overflow: hidden;
   }
 
   .calendar-grid {
-    grid-template-columns: repeat(7, minmax(106px, 1fr));
-    min-width: 742px;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    min-width: 0;
+  }
+
+  .calendar-weekday {
+    padding: 7px 1px;
+    font-size: 9px;
+    text-align: center;
   }
 
   .calendar-day {
-    min-height: 96px;
+    min-height: 72px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 2px;
+  }
+
+  .calendar-date {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 100%;
+    margin: 0;
+    font-size: 10px;
+  }
+
+  .calendar-item {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 7px;
+    margin: 1px 0 0;
+    padding: 0;
+    color: transparent;
+    border: 0;
+    border-radius: 50%;
+    font-size: 0;
+  }
+
+  .calendar-item--event {
+    background: var(--brand);
+  }
+
+  .calendar-item--commitment {
+    background: var(--line-strong);
+  }
+
+  .calendar-item--waiting {
+    background: var(--danger);
+  }
+
+  .calendar-more {
+    flex: 0 0 100%;
+    margin: 1px 0 0;
+    font-size: 8px;
+    line-height: 1;
+    text-align: center;
   }
 
   .calendar-day-view {
@@ -3269,6 +3425,7 @@ a:active {
 
   .calendar-help {
     max-width: 44ch;
+    margin-top: 9px;
     line-height: 1.45;
   }
 
@@ -3312,7 +3469,17 @@ a:active {
   }
 
   .feed-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
     padding: 11px 14px;
+    overflow: visible;
+  }
+
+  .feed-tabs .tab {
+    width: 100%;
+    min-height: 40px;
+    padding-inline: 6px;
   }
 
   .thread__intro {

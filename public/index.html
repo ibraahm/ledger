@@ -193,6 +193,16 @@
               <input class="settings__input" id="taskDueTime" type="time" />
             </div>
             <div>
+              <label class="settings__label" for="taskRecurrence">Repeat</label>
+              <select class="settings__input" id="taskRecurrence">
+                <option value="none">Does not repeat</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+              </select>
+            </div>
+            <div>
               <label class="settings__label" for="taskGoalArea">Goal Area</label>
               <select class="settings__input" id="taskGoalArea"></select>
             </div>
@@ -201,6 +211,7 @@
               <select class="settings__input" id="taskType"></select>
             </div>
           </div>
+          <p class="settings__hint">Recurring tasks need a due date. Completing one schedules the next occurrence.</p>
           <p class="task-editor__type-help" id="taskTypeHelp">Choose the one framework that matches the work.</p>
           <div class="task-framework__operational" id="taskOperationalFields"></div>
           <details class="task-editor__advanced" id="taskAdvancedDetails">

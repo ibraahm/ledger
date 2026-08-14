@@ -295,6 +295,14 @@ ALTER TABLE commitments ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAU
 ALTER TABLE events ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE events ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    version: 9,
+    name: "recurring commitments",
+    sql: `
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS recurrence TEXT NOT NULL DEFAULT 'none';
+ALTER TABLE commitments ADD COLUMN IF NOT EXISTS recurrence_anchor_on DATE;
+CREATE INDEX IF NOT EXISTS commitments_recurrence ON commitments (status, recurrence, due_on);`,
+  },
 ];
 
 async function migrate(target: RootDb): Promise<void> {

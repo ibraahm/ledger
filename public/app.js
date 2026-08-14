@@ -30,6 +30,7 @@ const taskEditorForm = document.getElementById("taskEditorForm");
 const taskTitle = document.getElementById("taskTitle");
 const taskDueOn = document.getElementById("taskDueOn");
 const taskDueTime = document.getElementById("taskDueTime");
+const taskRecurrence = document.getElementById("taskRecurrence");
 const taskPriority = document.getElementById("taskPriority");
 const taskGoalArea = document.getElementById("taskGoalArea");
 const taskType = document.getElementById("taskType");
@@ -114,6 +115,19 @@ let currentTaskFramework = {};
 let slashMenuOpen = false;
 let slashSelection = 0;
 
+const GOAL_AREA_OPTIONS = [
+  "company", "digital", "compliance", "agents", "partners", "banking", "growth", "team",
+  "personal_finance", "personal_health_family",
+].map((value) => ({
+  value,
+  label: value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" "),
+}));
+const GOAL_PRIORITY_OPTIONS = [
+  { value: "normal", label: "Normal" },
+  { value: "high", label: "High" },
+  { value: "low", label: "Low" },
+];
+
 const slashCommands = [
   {
     command: "/today",
@@ -188,6 +202,22 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+function appendSelectOptions(select, options, selectedValue = "") {
+  for (const { value, label } of options) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    option.selected = value === selectedValue;
+    select.append(option);
+  }
+}
+
+function labeledGoalControl(labelText, control) {
+  const label = el("label", "settings__label", labelText);
+  label.append(control);
+  return label;
 }
 
 function showBanner(message, tone = "success") {
@@ -1611,6 +1641,7 @@ async function openTaskEditor(id, show = true) {
     taskTitle.value = data.title;
     taskDueOn.value = data.dueOn || "";
     taskDueTime.value = data.dueTime || "";
+    taskRecurrence.value = data.recurrence || "none";
     taskPriority.value = data.priority;
     taskGoalArea.value = data.goalArea || "company";
     taskType.value = data.taskType || "prepare";
@@ -1678,6 +1709,10 @@ taskEditorForm.addEventListener("submit", async (event) => {
   const button = document.getElementById("saveTask");
   button.disabled = true;
   try {
+    if (taskRecurrence.value !== "none" && !taskDueOn.value) {
+      taskDueOn.focus();
+      throw new Error("Choose the first due date for this recurring task.");
+    }
     const response = await fetch(`/api/task/${currentTaskId}`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1685,6 +1720,7 @@ taskEditorForm.addEventListener("submit", async (event) => {
         detail: taskDetail.value,
         dueOn: taskDueOn.value || null,
         dueTime: taskDueTime.value || null,
+        recurrence: taskRecurrence.value,
         priority: taskPriority.value,
         goalArea: taskGoalArea.value,
         taskType: taskType.value,
@@ -1791,12 +1827,7 @@ function manualGoalForm() {
   detailLabel.append(detail);
   const areaLabel = el("label", "settings__label", "Goal Area");
   const area = el("select", "settings__input");
-  for (const value of ["company", "digital", "compliance", "agents", "partners", "banking", "growth", "team", "personal_finance", "personal_health_family"]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-    area.append(option);
-  }
+  appendSelectOptions(area, GOAL_AREA_OPTIONS, "company");
   areaLabel.append(area);
   const targetLabel = el("label", "settings__label", "Target date");
   const target = el("input", "settings__input");
@@ -1804,12 +1835,7 @@ function manualGoalForm() {
   targetLabel.append(target);
   const priorityLabel = el("label", "settings__label", "Priority");
   const priority = el("select", "settings__input");
-  for (const [value, label] of [["normal", "Normal"], ["high", "High"], ["low", "Low"]]) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    priority.append(option);
-  }
+  appendSelectOptions(priority, GOAL_PRIORITY_OPTIONS, "normal");
   priorityLabel.append(priority);
   const error = el("p", "settings__error");
   error.setAttribute("role", "alert");
@@ -1839,7 +1865,81 @@ function manualGoalForm() {
   return section;
 }
 
+function goalEditForm(goal) {
+  const form = el("form", "goal-edit");
+  form.id = `goalEdit-${goal.id}`;
+  form.hidden = true;
+  const fields = el("div", "goal-edit__fields");
+
+  const title = el("input", "settings__input");
+  title.type = "text";
+  title.required = true;
+  title.value = goal.title;
+
+  const detail = el("textarea", "settings__input");
+  detail.rows = 2;
+  detail.value = goal.detail || "";
+
+  const area = el("select", "settings__input");
+  appendSelectOptions(area, GOAL_AREA_OPTIONS, goal.goalArea || "company");
+
+  const target = el("input", "settings__input");
+  target.type = "date";
+  target.value = goal.targetOn || "";
+
+  const priority = el("select", "settings__input");
+  appendSelectOptions(priority, GOAL_PRIORITY_OPTIONS, goal.priority || "normal");
+
+  fields.append(
+    labeledGoalControl("Outcome", title),
+    labeledGoalControl("Success means", detail),
+    labeledGoalControl("Goal Area", area),
+    labeledGoalControl("Target date", target),
+    labeledGoalControl("Priority", priority),
+  );
+
+  const error = el("p", "settings__error");
+  error.setAttribute("role", "alert");
+  const actions = el("div", "goal-edit__actions");
+  const cancel = el("button", "settings__secondary", "Cancel");
+  cancel.type = "button";
+  const save = el("button", "settings__save", "Save changes");
+  save.type = "submit";
+  actions.append(cancel, save);
+  form.append(fields, error, actions);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    save.disabled = true;
+    try {
+      const response = await fetch(`/api/goals/${goal.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title.value,
+          detail: detail.value,
+          goalArea: area.value,
+          targetOn: target.value,
+          priority: priority.value,
+        }),
+      });
+      if (response.status === 401) return (location.href = "/");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not update that goal.");
+      showBanner("Goal updated.");
+      refresh();
+    } catch (reason) {
+      error.textContent = reason.message;
+      save.disabled = false;
+    }
+  });
+
+  return { form, title, cancel };
+}
+
 function goalRow(goal, isArchived = false) {
+  const item = el("div", "goal-item");
   const row = el("div", `row row--goal${isArchived ? " row--archived" : ""}${goal.priority === "high" ? " row--priority" : ""}`);
   row.append(el("div", "row__when", goal.targetOn ? dayLabel(goal.targetOn) : "Ongoing"));
   const what = el("div", "row__what");
@@ -1848,6 +1948,31 @@ function goalRow(goal, isArchived = false) {
   const context = [goal.goalArea?.replaceAll("_", " "), goal.entityName, goal.detail].filter(Boolean).join(" / ");
   if (context) label.append(el("span", "row__where", context));
   copy.append(label);
+  const actions = el("div", "goal__actions");
+  let editor = null;
+  let edit = null;
+  if (!isArchived) {
+    editor = goalEditForm(goal);
+    edit = el("button", "goal__edit", "Edit");
+    edit.type = "button";
+    edit.setAttribute("aria-controls", editor.form.id);
+    edit.setAttribute("aria-expanded", "false");
+    edit.setAttribute("aria-label", `Edit goal: ${goal.title}`);
+    const closeEditor = () => {
+      editor.form.hidden = true;
+      edit.textContent = "Edit";
+      edit.setAttribute("aria-expanded", "false");
+    };
+    edit.addEventListener("click", () => {
+      const opening = editor.form.hidden;
+      editor.form.hidden = !opening;
+      edit.textContent = opening ? "Close edit" : "Edit";
+      edit.setAttribute("aria-expanded", String(opening));
+      if (opening) editor.title.focus();
+    });
+    editor.cancel.addEventListener("click", closeEditor);
+    actions.append(edit);
+  }
   const action = el("button", "goal__archive", isArchived ? "Restore" : "Archive");
   action.type = "button";
   action.setAttribute("aria-label", `${isArchived ? "Restore" : "Archive"} goal: ${goal.title}`);
@@ -1869,9 +1994,12 @@ function goalRow(goal, isArchived = false) {
       showBanner(error.message, "error");
     }
   });
-  what.append(copy, action);
+  actions.append(action);
+  what.append(copy, actions);
   row.append(what);
-  return row;
+  item.append(row);
+  if (editor) item.append(editor.form);
+  return item;
 }
 
 function renderGoals(goals) {
@@ -1921,18 +2049,27 @@ function commitmentRow(commitment, late, undated) {
   tick.setAttribute("aria-label", `Mark complete: ${commitment.title}`);
   tick.addEventListener("click", async () => {
     tick.disabled = true;
-    await fetch("/api/commitment/close", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: commitment.id }),
-    });
-    refresh();
+    try {
+      const response = await fetch("/api/commitment/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: commitment.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not complete the task.");
+      showBanner(data.nextDueOn ? `Task completed. Next occurrence: ${dayLabel(data.nextDueOn)}.` : "Task completed.");
+      refresh();
+    } catch (error) {
+      tick.disabled = false;
+      showBanner(error.message, "error");
+    }
   });
   const label = el("button", "row__task-open", commitment.title);
   label.type = "button";
   label.setAttribute("aria-label", `Open task: ${commitment.title}`);
   label.addEventListener("click", () => openTaskEditor(commitment.id));
-  const context = [commitment.taskId, type.replaceAll("_", " "), commitment.waitingOn ? `Waiting: ${commitment.waitingOn}` : null, commitment.nextAction ? `Next: ${commitment.nextAction}` : null, commitment.entityName].filter(Boolean).join(" / ");
+  const repeat = commitment.recurrence && commitment.recurrence !== "none" ? `Repeats ${commitment.recurrence}` : null;
+  const context = [commitment.taskId, type.replaceAll("_", " "), repeat, commitment.waitingOn ? `Waiting: ${commitment.waitingOn}` : null, commitment.nextAction ? `Next: ${commitment.nextAction}` : null, commitment.entityName].filter(Boolean).join(" / ");
   const itemCount = commitment.items?.length || 0;
   if (context || itemCount) label.append(el("span", "row__where", [context, itemCount ? `${itemCount} batch items` : null].filter(Boolean).join(" / ")));
   what.append(tick, label);

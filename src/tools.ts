@@ -12,6 +12,7 @@ import {
   sanitizeTaskFramework,
   type TaskFramework,
 } from "./task-framework.js";
+import { RECURRENCE_FREQUENCIES, normalizeRecurrence } from "./recurrence.js";
 
 export interface ToolResult {
   output: string;
@@ -54,6 +55,11 @@ export const toolSchemas: ToolSchema[] = [
           goal_area: { type: "string", enum: [...GOAL_AREAS], description: "The single Goal Area this work advances." },
           due_on: { type: "string", description: "YYYY-MM-DD. Resolve relative dates against the current date given to you." },
           due_time: { type: "string", description: "Optional 24-hour time as HH:mm." },
+          recurrence: {
+            type: "string",
+            enum: [...RECURRENCE_FREQUENCIES],
+            description: "Repeat schedule. Daily, weekly, monthly, and quarterly tasks require due_on. Omit or use none for a one-time task.",
+          },
           priority: { type: "string", enum: ["low", "normal", "high"] },
           owner: { type: "string", description: "Who owns completion. Use 'me' for the Ledger owner." },
           waiting_on: { type: "string", description: "Person, organization, approval, document, or response blocking progress. Empty when not blocked." },
@@ -127,6 +133,11 @@ export const toolSchemas: ToolSchema[] = [
           goal_area: { type: "string", enum: [...GOAL_AREAS] },
           due_time: { type: "string", description: "New 24-hour time as HH:mm." },
           clear_due_time: { type: "boolean" },
+          recurrence: {
+            type: "string",
+            enum: [...RECURRENCE_FREQUENCIES],
+            description: "Change the repeat schedule. Use none to stop repeating.",
+          },
           owner: { type: "string" },
           waiting_on: { type: "string" },
           next_action: { type: "string" },
@@ -513,6 +524,10 @@ export async function runTool(
       const taskType = normalizeTaskType(args.task_type);
       const goalArea = normalizeGoalArea(args.goal_area);
       const dueTime = /^\d{2}:\d{2}$/.test(String(args.due_time || "")) ? String(args.due_time) : undefined;
+      const recurrence = normalizeRecurrence(args.recurrence);
+      if (recurrence !== "none" && !dueOn) {
+        return { output: "No recurring task was created because it needs a due date. Ask for the first due date." };
+      }
       const owner = String(args.owner || "me").trim() || "me";
       const items = Array.isArray(args.items) ? args.items.slice(0, 100).map((item: any) => ({
         title: String(item?.title || "").trim(),
@@ -528,6 +543,7 @@ export async function runTool(
         goalArea,
         dueOn,
         dueTime,
+        recurrence,
         priority: args.priority ? String(args.priority) : undefined,
         owner,
         framework: sanitizeTaskFramework(taskType, frameworkFromArgs(args)),
@@ -574,23 +590,29 @@ export async function runTool(
     case "update_commitment": {
       const entity = args.entity ? await resolveEntity(args.entity, args.entity_kind as EntityKind) : undefined;
       const taskType = args.task_type !== undefined ? normalizeTaskType(args.task_type) : undefined;
-      const result = await store.updateCommitment(String(args.query || ""), {
-        title: args.title ? String(args.title) : undefined,
-        detail: args.detail !== undefined ? String(args.detail) : undefined,
-        dueOn: args.due_on !== undefined ? normalizeDate(args.due_on)?.slice(0, 10) : undefined,
-        clearDue: args.clear_due === true,
-        dueTime: args.due_time !== undefined && /^\d{2}:\d{2}$/.test(String(args.due_time)) ? String(args.due_time) : undefined,
-        clearDueTime: args.clear_due_time === true,
-        priority: args.priority ? String(args.priority) : undefined,
-        direction: args.direction === "theirs" ? "theirs" : args.direction === "mine" ? "mine" : undefined,
-        taskType,
-        goalArea: args.goal_area !== undefined ? normalizeGoalArea(args.goal_area) : undefined,
-        owner: args.owner !== undefined ? String(args.owner) : undefined,
-        framework: taskType || args.framework || args.contact || Object.hasOwn(args, "waiting_on") || Object.hasOwn(args, "next_action")
-          ? frameworkFromArgs(args)
-          : undefined,
-        entityId: entity?.id,
-      });
+      let result;
+      try {
+        result = await store.updateCommitment(String(args.query || ""), {
+          title: args.title ? String(args.title) : undefined,
+          detail: args.detail !== undefined ? String(args.detail) : undefined,
+          dueOn: args.due_on !== undefined ? normalizeDate(args.due_on)?.slice(0, 10) : undefined,
+          clearDue: args.clear_due === true,
+          dueTime: args.due_time !== undefined && /^\d{2}:\d{2}$/.test(String(args.due_time)) ? String(args.due_time) : undefined,
+          clearDueTime: args.clear_due_time === true,
+          recurrence: args.recurrence !== undefined ? normalizeRecurrence(args.recurrence) : undefined,
+          priority: args.priority ? String(args.priority) : undefined,
+          direction: args.direction === "theirs" ? "theirs" : args.direction === "mine" ? "mine" : undefined,
+          taskType,
+          goalArea: args.goal_area !== undefined ? normalizeGoalArea(args.goal_area) : undefined,
+          owner: args.owner !== undefined ? String(args.owner) : undefined,
+          framework: taskType || args.framework || args.contact || Object.hasOwn(args, "waiting_on") || Object.hasOwn(args, "next_action")
+            ? frameworkFromArgs(args)
+            : undefined,
+          entityId: entity?.id,
+        });
+      } catch (error) {
+        return { output: error instanceof Error ? error.message : "Could not update that commitment." };
+      }
       if (!result.item) return mutationMiss("open commitment", args.query, result.matches);
       const item = result.item;
       return {
@@ -756,7 +778,7 @@ export async function runTool(
         }
       }
       const taskLine = (item: store.Commitment) =>
-        `- ${item.taskId} ${item.title} [${item.goalArea} / ${item.taskType}]${item.entityName ? ` [${item.entityName}]` : ""}${item.dueOn ? ` due ${item.dueOn}${item.dueTime ? ` ${item.dueTime}` : ""}` : " no date"}${item.priority !== "normal" ? ` ${item.priority} priority` : ""}${item.waitingOn ? `; waiting on ${item.waitingOn}` : ""}${item.nextAction ? `; next: ${item.nextAction}` : ""}${item.items.length ? `; items: ${item.items.slice(0, 12).map((child) => child.title).join(" | ")}` : ""}`;
+        `- ${item.taskId} ${item.title} [${item.goalArea} / ${item.taskType}]${item.entityName ? ` [${item.entityName}]` : ""}${item.dueOn ? ` due ${item.dueOn}${item.dueTime ? ` ${item.dueTime}` : ""}` : " no date"}${item.recurrence !== "none" ? `; repeats ${item.recurrence}` : ""}${item.priority !== "normal" ? ` ${item.priority} priority` : ""}${item.waitingOn ? `; waiting on ${item.waitingOn}` : ""}${item.nextAction ? `; next: ${item.nextAction}` : ""}${item.items.length ? `; items: ${item.items.slice(0, 12).map((child) => child.title).join(" | ")}` : ""}`;
       const eventLine = (item: store.CalEvent) =>
         `- ${item.title}${item.entityName ? ` [${item.entityName}]` : ""} at ${item.startsAt.slice(0, 16).replace("T", " ")}${item.endsAt ? ` to ${item.endsAt.slice(0, 16).replace("T", " ")}` : ""}`;
       const goalLine = (item: store.Goal) =>
@@ -780,7 +802,7 @@ export async function runTool(
       const to = normalizeDate(args.to)?.slice(0, 10) || addDays(from, 7);
       const data = await store.agenda(from, to);
       const line = (c: store.Commitment) =>
-        `- ${c.taskId} ${c.title} [${c.goalArea} / ${c.taskType}]${c.entityName ? ` [${c.entityName}]` : ""}${c.dueOn ? ` due ${c.dueOn}${c.dueTime ? ` ${c.dueTime}` : ""}` : ""}${c.waitingOn ? ` (waiting on ${c.waitingOn})` : c.direction === "theirs" ? " (they owe)" : ""}${c.nextAction ? `; next: ${c.nextAction}` : ""}`;
+        `- ${c.taskId} ${c.title} [${c.goalArea} / ${c.taskType}]${c.entityName ? ` [${c.entityName}]` : ""}${c.dueOn ? ` due ${c.dueOn}${c.dueTime ? ` ${c.dueTime}` : ""}` : ""}${c.recurrence !== "none" ? `; repeats ${c.recurrence}` : ""}${c.waitingOn ? ` (waiting on ${c.waitingOn})` : c.direction === "theirs" ? " (they owe)" : ""}${c.nextAction ? `; next: ${c.nextAction}` : ""}`;
       const section = (label: string, items: string[]) =>
         items.length ? `${label}:\n${items.join("\n")}` : `${label}: none`;
       return {
@@ -802,7 +824,10 @@ export async function runTool(
     case "close_commitment": {
       const result = await store.completeCommitment(String(args.query || ""));
       if (!result.item) return mutationMiss("open commitment", args.query, result.matches);
-      return { output: `Closed: ${result.item.title}`, action: { label: `Done: ${result.item.title}` } };
+      return {
+        output: `Closed: ${result.item.title}${result.item.nextDueOn ? `. Next occurrence: ${result.item.nextDueOn}.` : ""}`,
+        action: { label: `Done: ${result.item.title}` },
+      };
     }
 
     case "list_goals": {

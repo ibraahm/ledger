@@ -249,11 +249,11 @@ Ledger reports the current transport state under **Settings > Security** as Secu
 
 ### Trusted HTTPS on the public IP
 
-Let’s Encrypt now issues trusted, short-lived certificates for public IPv4 addresses. The included installer configures Nginx, obtains a certificate for `129.121.99.71`, redirects HTTP to HTTPS, binds Ledger only to loopback, and installs an eight-hour renewal check:
+Let’s Encrypt now issues trusted, short-lived certificates for public IPv4 addresses. The included installer configures Nginx, obtains a certificate for the address supplied in `LEDGER_IP`, redirects HTTP to HTTPS, binds Ledger only to loopback, and installs an eight-hour renewal check. `LEDGER_IP` is required and must be an address assigned exclusively to the Ledger server; the script intentionally has no default address.
 
 ```bash
 cd /opt/ledger
-LETSENCRYPT_EMAIL=you@example.com bash scripts/secure-public-ip.sh
+sudo LEDGER_IP=203.0.113.10 LETSENCRYPT_EMAIL=you@example.com bash scripts/secure-public-ip.sh
 ```
 
-Before running it, allow inbound TCP ports 80 and 443 in the hosting firewall. After it succeeds, use `https://129.121.99.71` and remove any provider-level rule that exposes port 4321. The script does not modify SSH or firewall rules.
+Replace `203.0.113.10` with Ledger's actual dedicated public IPv4 address; it is a documentation-only example and will not work as a deployment target. Before running the installer, allow inbound TCP ports 80 and 443 in the hosting firewall. After it succeeds, use `https://<LEDGER_IP>` and remove any provider-level rule that exposes port 4321. The script does not modify SSH or firewall rules.

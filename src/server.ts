@@ -28,6 +28,7 @@ import {
   sanitizeTaskFramework,
   taskFrameworkCatalog,
 } from "./task-framework.js";
+import { RECURRENCE_FREQUENCIES, normalizeRecurrence } from "./recurrence.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(here, "../public");
@@ -502,22 +503,36 @@ async function main() {
     if (!(GOAL_AREAS as readonly string[]).includes(String(req.body?.goalArea))) {
       return res.status(400).json({ error: "Choose a valid goal area." });
     }
+    if (req.body?.recurrence !== undefined
+      && !(RECURRENCE_FREQUENCIES as readonly string[]).includes(String(req.body.recurrence))) {
+      return res.status(400).json({ error: "Choose a valid repeat frequency." });
+    }
     const taskType = normalizeTaskType(req.body.taskType);
     const goalArea = normalizeGoalArea(req.body.goalArea);
+    const recurrence = req.body?.recurrence === undefined ? undefined : normalizeRecurrence(req.body.recurrence);
     if (!title) return res.status(400).json({ error: "Task title is required." });
     if (dueOn && !/^\d{4}-\d{2}-\d{2}$/.test(dueOn)) return res.status(400).json({ error: "Use a valid due date." });
     if (dueTime && !/^\d{2}:\d{2}$/.test(dueTime)) return res.status(400).json({ error: "Use a valid due time." });
-    const task = await store.updateCommitmentById(Number(req.params.id), {
-      title,
-      detail: String(req.body?.detail || ""),
-      dueOn,
-      dueTime,
-      priority,
-      taskType,
-      goalArea,
-      owner: String(req.body?.owner || "me"),
-      framework: sanitizeTaskFramework(taskType, req.body?.framework),
-    });
+    if (recurrence && recurrence !== "none" && !dueOn) {
+      return res.status(400).json({ error: "Recurring tasks need a due date." });
+    }
+    let task;
+    try {
+      task = await store.updateCommitmentById(Number(req.params.id), {
+        title,
+        detail: String(req.body?.detail || ""),
+        dueOn,
+        dueTime,
+        priority,
+        taskType,
+        goalArea,
+        recurrence,
+        owner: String(req.body?.owner || "me"),
+        framework: sanitizeTaskFramework(taskType, req.body?.framework),
+      });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "Could not update task." });
+    }
     if (!task) return res.status(404).json({ error: "Open task not found." });
     res.json(task);
   });
@@ -609,6 +624,38 @@ async function main() {
     res.status(goal.duplicate ? 200 : 201).json(goal);
   });
 
+  app.put("/api/goals/:id", authed, async (req, res) => {
+    const id = Number(req.params.id);
+    const title = String(req.body?.title || "").replace(/\s+/g, " ").trim();
+    const detail = String(req.body?.detail || "").trim();
+    const targetOn = String(req.body?.targetOn || "").trim();
+    const priority = String(req.body?.priority || "normal");
+    if (!Number.isSafeInteger(id) || id < 1) {
+      return res.status(400).json({ error: "Invalid goal ID." });
+    }
+    if (!(GOAL_AREAS as readonly string[]).includes(String(req.body?.goalArea))) {
+      return res.status(400).json({ error: "Choose a Goal Area." });
+    }
+    if (title.split(" ").filter(Boolean).length < 2) {
+      return res.status(400).json({ error: "Write a clear outcome for this goal." });
+    }
+    if (targetOn && !/^\d{4}-\d{2}-\d{2}$/.test(targetOn)) {
+      return res.status(400).json({ error: "Use a valid target date." });
+    }
+    if (!["low", "normal", "high"].includes(priority)) {
+      return res.status(400).json({ error: "Choose a valid priority." });
+    }
+    const goal = await store.updateGoalById(id, {
+      title,
+      detail,
+      targetOn: targetOn || null,
+      priority,
+      goalArea: normalizeGoalArea(req.body.goalArea),
+    });
+    if (!goal) return res.status(404).json({ error: "Active goal not found." });
+    res.json(goal);
+  });
+
   app.post("/api/maintenance/consolidate", authed, async (_req, res) => {
     res.json({ ok: true, ...(await store.consolidateDuplicates()) });
   });
@@ -681,7 +728,8 @@ async function main() {
     const c = Number.isSafeInteger(id) && id > 0
       ? await store.closeCommitmentById(id)
       : await store.closeCommitment(String(req.body?.query || ""));
-    res.json({ ok: Boolean(c) });
+    if (!c) return res.status(404).json({ error: "Open task not found." });
+    res.json({ ok: true, nextDueOn: c.nextDueOn || null });
   });
 
   app.listen(config.port, config.bindHost, () => {

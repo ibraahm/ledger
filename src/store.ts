@@ -10,8 +10,14 @@ import {
   type TaskFramework,
   type TaskType,
 } from "./task-framework.js";
+import {
+  nextRecurrenceDate,
+  normalizeRecurrence,
+  type RecurrenceFrequency,
+} from "./recurrence.js";
 
 export type { GoalArea, TaskFramework, TaskType } from "./task-framework.js";
+export type { RecurrenceFrequency } from "./recurrence.js";
 
 /* Encryption is applied and reversed only in this file. Everything above it
    deals in plain objects; everything below it only ever sees ciphertext. */
@@ -396,6 +402,8 @@ export interface Commitment {
   status: string;
   dueOn: string | null;
   dueTime: string | null;
+  recurrence: RecurrenceFrequency;
+  recurrenceAnchorOn: string | null;
   priority: string;
   owner: string;
   framework: TaskFramework;
@@ -411,6 +419,7 @@ export interface Commitment {
   completedAt: string | null;
   items: CommitmentItem[];
   duplicate?: boolean;
+  nextDueOn?: string;
 }
 
 function parsedTaskFramework(row: any, taskType: TaskType): TaskFramework {
@@ -462,6 +471,7 @@ function toCommitment(row: any): Commitment {
   const taskId = `TASK-${String(id).padStart(3, "0")}`;
   const createdAt = isoStamp(row.created_at);
   const completedAt = row.closed_at ? isoStamp(row.closed_at) : null;
+  const recurrence = normalizeRecurrence(row.recurrence);
   return {
     id,
     taskId,
@@ -473,6 +483,8 @@ function toCommitment(row: any): Commitment {
     status: row.status,
     dueOn: isoDate(row.due_on),
     dueTime: row.due_time ? String(row.due_time).slice(0, 5) : null,
+    recurrence,
+    recurrenceAnchorOn: isoDate(row.recurrence_anchor_on),
     priority: row.priority,
     owner: row.owner || "me",
     framework,
@@ -486,6 +498,7 @@ function toCommitment(row: any): Commitment {
       ...framework,
       due_date: isoDate(row.due_on) || "",
       due_time: row.due_time ? String(row.due_time).slice(0, 5) : "",
+      recurrence,
       owner: row.owner || "me",
       created_at: createdAt.slice(0, 10),
       completed_at: completedAt,
@@ -555,6 +568,8 @@ export async function addCommitment(input: {
   goalArea?: GoalArea;
   dueOn?: string;
   dueTime?: string;
+  recurrence?: RecurrenceFrequency;
+  recurrenceAnchorOn?: string;
   priority?: string;
   owner?: string;
   framework?: TaskFramework;
@@ -569,6 +584,7 @@ export async function addCommitment(input: {
   const owner = String(input.owner || "me").replace(/\s+/g, " ").trim().slice(0, 160) || "me";
   const direction = input.direction || (owner.toLowerCase() === "me" ? "mine" : "theirs");
   const framework = sanitizeTaskFramework(taskType, input.framework || {});
+  const requestedRecurrence = input.recurrence === undefined ? undefined : normalizeRecurrence(input.recurrence);
   const { rows: candidates } = await db.query(
     `SELECT c.*, e.name AS entity_name, e.slug AS entity_slug FROM commitments c
      LEFT JOIN entities e ON e.id = c.entity_id
@@ -605,6 +621,14 @@ export async function addCommitment(input: {
       ? null
       : existingEntityId || incomingEntityId;
     const nextFramework = mergedTaskFramework(taskType, parsedTaskFramework(existing, normalizeTaskType(existing.task_type)), framework);
+    const dueOn = earliestDate(isoDate(existing.due_on), input.dueOn);
+    const recurrence = requestedRecurrence ?? normalizeRecurrence(existing.recurrence);
+    if (recurrence !== "none" && !dueOn) throw new Error("A recurring task needs a due date.");
+    const recurrenceAnchorOn = recurrence === "none"
+      ? null
+      : input.recurrenceAnchorOn || (recurrence === normalizeRecurrence(existing.recurrence)
+        ? isoDate(existing.recurrence_anchor_on)
+        : null) || dueOn;
     const { rows } = await db.query(
       `UPDATE commitments SET
          title = $2,
@@ -618,6 +642,8 @@ export async function addCommitment(input: {
          due_time = $10,
          owner = $11,
          framework_enc = $12,
+         recurrence = $13,
+         recurrence_anchor_on = $14,
          updated_at = now(),
          revision = revision + 1
        WHERE id = $1 RETURNING *`,
@@ -627,7 +653,7 @@ export async function addCommitment(input: {
           ? workstreamTitle(commitmentWorkstreamKey(title)!, existing.title)
           : /^complete\b/i.test(title) && /^create\b/i.test(existing.title) ? title : existing.title,
         detail ? encrypt(detail) : null,
-        earliestDate(isoDate(existing.due_on), input.dueOn),
+        dueOn,
         strongestPriority(existing.priority, input.priority),
         mergedEntityId,
         direction,
@@ -636,6 +662,8 @@ export async function addCommitment(input: {
         input.dueTime || existing.due_time || null,
         owner,
         encrypt(JSON.stringify(nextFramework)),
+        recurrence,
+        recurrenceAnchorOn,
       ],
     );
     const commitment = { ...toCommitment({ ...rows[0], entity_name: mergedEntityId === existingEntityId ? existing.entity_name : null }), duplicate: true };
@@ -649,10 +677,13 @@ export async function addCommitment(input: {
     ]);
     return commitment;
   }
+  const recurrence = requestedRecurrence || "none";
+  if (recurrence !== "none" && !input.dueOn) throw new Error("A recurring task needs a due date.");
   const { rows } = await db.query(
     `INSERT INTO commitments
-       (title, detail_enc, direction, task_type, goal_area, due_on, due_time, priority, owner, framework_enc, entity_id, entry_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8,'normal'), $9, $10, $11, $12) RETURNING *`,
+       (title, detail_enc, direction, task_type, goal_area, due_on, due_time, priority, owner, framework_enc,
+        entity_id, entry_id, recurrence, recurrence_anchor_on)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8,'normal'), $9, $10, $11, $12, $13, $14) RETURNING *`,
     [
       title,
       input.detail ? encrypt(input.detail) : null,
@@ -666,11 +697,62 @@ export async function addCommitment(input: {
       encrypt(JSON.stringify(framework)),
       input.entityId || null,
       input.entryId || null,
+      recurrence,
+      recurrence === "none" ? null : input.recurrenceAnchorOn || input.dueOn,
     ],
   );
   const commitment = toCommitment(rows[0]);
   commitment.items = await upsertCommitmentItems(commitment.id, input.items || []);
   return commitment;
+}
+
+async function completeCommitmentById(id: number): Promise<Commitment | null> {
+  return withTransaction(async () => {
+    const db = await getDb();
+    const { rows } = await db.query<any>(
+      `SELECT c.*, e.name AS entity_name FROM commitments c
+       LEFT JOIN entities e ON e.id = c.entity_id
+       WHERE c.id = $1 AND c.status = 'open' LIMIT 1`,
+      [id],
+    );
+    const current = rows[0];
+    if (!current) return null;
+    const { rows: updated } = await db.query<any>(
+      `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1
+       WHERE id = $1 AND status = 'open' RETURNING *`,
+      [id],
+    );
+    if (!updated[0]) return null;
+
+    const completed = toCommitment({ ...updated[0], entity_name: current.entity_name });
+    completed.items = (await itemsForCommitments([id])).get(id) || [];
+    const recurrence = normalizeRecurrence(current.recurrence);
+    const dueOn = isoDate(current.due_on);
+    if (recurrence === "none" || !dueOn) return completed;
+
+    const recurrenceAnchorOn = isoDate(current.recurrence_anchor_on) || dueOn;
+    const nextDueOn = nextRecurrenceDate(dueOn, recurrence, recurrenceAnchorOn);
+    const { rows: nextRows } = await db.query<any>(
+      `INSERT INTO commitments
+         (title, detail_enc, direction, task_type, goal_area, due_on, due_time, priority, owner, framework_enc,
+          entity_id, entry_id, recurrence, recurrence_anchor_on)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+      [current.title, current.detail_enc, current.direction, current.task_type, current.goal_area, nextDueOn,
+        current.due_time, current.priority, current.owner, current.framework_enc, current.entity_id, current.entry_id,
+        recurrence, recurrenceAnchorOn],
+    );
+    const nextId = Number(nextRows[0].id);
+    if (completed.items.length) {
+      await upsertCommitmentItems(nextId, completed.items.map((item) => ({
+        title: item.title,
+        detail: item.detail,
+        dueOn: item.dueOn ? nextRecurrenceDate(item.dueOn, recurrence, item.dueOn) : undefined,
+        entityId: item.entityId,
+      })));
+    }
+    completed.nextDueOn = nextDueOn;
+    return completed;
+  });
 }
 
 export async function closeCommitment(query: string): Promise<Commitment | null> {
@@ -683,21 +765,11 @@ export async function closeCommitment(query: string): Promise<Commitment | null>
     [query],
   );
   if (!rows[0]) return null;
-  const { rows: updated } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
-    [rows[0].id],
-  );
-  return toCommitment({ ...updated[0], entity_name: rows[0].entity_name });
+  return completeCommitmentById(Number(rows[0].id));
 }
 
 export async function closeCommitmentById(id: number): Promise<Commitment | null> {
-  const db = await getDb();
-  const { rows } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1
-     WHERE id = $1 AND status = 'open' RETURNING *`,
-    [id],
-  );
-  return rows[0] ? toCommitment(rows[0]) : null;
+  return completeCommitmentById(id);
 }
 
 export async function openCommitments(limit = 200): Promise<Commitment[]> {
@@ -741,6 +813,7 @@ export async function updateCommitmentById(
     detail?: string;
     dueOn?: string | null;
     dueTime?: string | null;
+    recurrence?: RecurrenceFrequency;
     priority: string;
     direction?: "mine" | "theirs";
     taskType?: TaskType;
@@ -756,14 +829,22 @@ export async function updateCommitmentById(
   const owner = String(changes.owner ?? current.owner).replace(/\s+/g, " ").trim().slice(0, 160) || "me";
   const direction = changes.direction || current.direction;
   const framework = mergedTaskFramework(taskType, current.framework, changes.framework);
+  const dueOn = changes.dueOn !== undefined ? changes.dueOn || null : current.dueOn;
+  const recurrence = changes.recurrence === undefined ? current.recurrence : normalizeRecurrence(changes.recurrence);
+  if (recurrence !== "none" && !dueOn) throw new Error("A recurring task needs a due date.");
+  const recurrenceAnchorOn = recurrence === "none"
+    ? null
+    : recurrence !== current.recurrence || dueOn !== current.dueOn
+      ? dueOn
+      : current.recurrenceAnchorOn || dueOn;
   const { rows } = await db.query(
     `UPDATE commitments SET title = $2, detail_enc = $3, due_on = $4, priority = $5, direction = $6, task_type = $7,
-       goal_area = $8, due_time = $9, owner = $10, framework_enc = $11,
+       goal_area = $8, due_time = $9, owner = $10, framework_enc = $11, recurrence = $12, recurrence_anchor_on = $13,
        updated_at = now(), revision = revision + 1
      WHERE id = $1 AND status = 'open' RETURNING *`,
     [id, changes.title.replace(/\s+/g, " ").trim(), changes.detail ? encrypt(changes.detail) : null,
-      changes.dueOn || null, changes.priority, direction, taskType, normalizeGoalArea(changes.goalArea || current.goalArea),
-      changes.dueTime || null, owner, encrypt(JSON.stringify(framework))],
+      dueOn, changes.priority, direction, taskType, normalizeGoalArea(changes.goalArea || current.goalArea),
+      changes.dueTime || null, owner, encrypt(JSON.stringify(framework)), recurrence, recurrenceAnchorOn],
   );
   if (!rows[0]) return null;
   const result = toCommitment(rows[0]);
@@ -887,6 +968,7 @@ export async function updateCommitment(
     clearDue?: boolean;
     dueTime?: string;
     clearDueTime?: boolean;
+    recurrence?: RecurrenceFrequency;
     priority?: string;
     direction?: "mine" | "theirs";
     taskType?: TaskType;
@@ -912,10 +994,19 @@ export async function updateCommitment(
   const detailEnc = changes.detail !== undefined ? (changes.detail ? encrypt(changes.detail) : null) : current.detail_enc;
   const dueOn = changes.clearDue ? null : changes.dueOn !== undefined ? changes.dueOn || null : isoDate(current.due_on);
   const dueTime = changes.clearDueTime ? null : changes.dueTime !== undefined ? changes.dueTime || null : current.due_time;
+  const currentRecurrence = normalizeRecurrence(current.recurrence);
+  const recurrence = changes.recurrence === undefined ? currentRecurrence : normalizeRecurrence(changes.recurrence);
+  if (recurrence !== "none" && !dueOn) throw new Error("A recurring task needs a due date.");
+  const recurrenceAnchorOn = recurrence === "none"
+    ? null
+    : recurrence !== currentRecurrence || dueOn !== isoDate(current.due_on)
+      ? dueOn
+      : isoDate(current.recurrence_anchor_on) || dueOn;
   const { rows: updated } = await db.query(
     `UPDATE commitments SET title = $2, detail_enc = $3, due_on = $4, priority = $5,
        direction = $6, entity_id = $7, task_type = $8, goal_area = $9, due_time = $10,
-       owner = $11, framework_enc = $12, updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
+       owner = $11, framework_enc = $12, recurrence = $13, recurrence_anchor_on = $14,
+       updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
     [
       current.id,
       changes.title?.replace(/\s+/g, " ").trim() || current.title,
@@ -929,6 +1020,8 @@ export async function updateCommitment(
       dueTime,
       owner,
       encrypt(JSON.stringify(framework)),
+      recurrence,
+      recurrenceAnchorOn,
     ],
   );
   const entityId = updated[0].entity_id ? Number(updated[0].entity_id) : null;
@@ -947,11 +1040,7 @@ export async function completeCommitment(query: string): Promise<RecordMutation<
   );
   const matches = matchingRows(rows, query, commitmentTitleKey);
   if (matches.length !== 1) return { item: null, matches: matches.slice(0, 6).map((row) => row.title) };
-  const { rows: updated } = await db.query(
-    `UPDATE commitments SET status = 'done', closed_at = now(), updated_at = now(), revision = revision + 1 WHERE id = $1 RETURNING *`,
-    [matches[0].id],
-  );
-  return { item: toCommitment({ ...updated[0], entity_name: matches[0].entity_name }), matches: [] };
+  return { item: await completeCommitmentById(Number(matches[0].id)), matches: [] };
 }
 
 /* ------------------------------------------------------------ goals */
@@ -1093,6 +1182,40 @@ export async function restoreGoalById(id: number): Promise<boolean> {
     [id],
   );
   return rows.length > 0;
+}
+
+export async function updateGoalById(
+  id: number,
+  changes: {
+    title: string;
+    detail?: string;
+    targetOn?: string | null;
+    priority: string;
+    goalArea: GoalArea;
+  },
+): Promise<Goal | null> {
+  const db = await getDb();
+  const { rows: currentRows } = await db.query(
+    `SELECT g.*, e.name AS entity_name FROM goals g
+     LEFT JOIN entities e ON e.id = g.entity_id
+     WHERE g.id = $1 AND g.status = 'active' LIMIT 1`,
+    [id],
+  );
+  const current = currentRows[0];
+  if (!current) return null;
+  const { rows } = await db.query(
+    `UPDATE goals SET title = $2, detail_enc = $3, target_on = $4, priority = $5, goal_area = $6
+     WHERE id = $1 AND status = 'active' RETURNING *`,
+    [
+      id,
+      changes.title.replace(/\s+/g, " ").trim(),
+      changes.detail ? encrypt(changes.detail.trim()) : null,
+      changes.targetOn || null,
+      changes.priority,
+      normalizeGoalArea(changes.goalArea),
+    ],
+  );
+  return rows[0] ? toGoal({ ...rows[0], entity_name: current.entity_name }) : null;
 }
 
 export async function updateGoal(

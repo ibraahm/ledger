@@ -24,6 +24,7 @@ const security = await import("../src/security.js");
 const prayer = await import("../src/prayer.js");
 const ledgerTools = await import("../src/tools.js");
 const taskFramework = await import("../src/task-framework.js");
+const recurrence = await import("../src/recurrence.js");
 
 after(async () => {
   const db = await dbModule.getDb();
@@ -34,10 +35,10 @@ after(async () => {
 test("versioned migrations run once and include current schema", async () => {
   const db = await dbModule.getDb();
   const first = await db.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   await dbModule.getDb();
   const second = await db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM schema_migrations");
-  assert.equal(Number(second.rows[0].count), 8);
+  assert.equal(Number(second.rows[0].count), 9);
 });
 
 test("captured text is encrypted at rest and decrypts through the store", async () => {
@@ -122,6 +123,31 @@ test("each commitment has one goal area and one encrypted typed framework", asyn
   assert.equal(await store.mergeCommitments([call.id, decision.id]), null);
 });
 
+test("goal fields can be edited by id without exposing the success definition", async () => {
+  const marker = `goal-detail-${crypto.randomBytes(4).toString("hex")}`;
+  const goal = await store.addGoal({
+    title: "Improve partner settlement reliability",
+    detail: "Initial definition",
+    targetOn: "2026-10-01",
+    priority: "normal",
+    goalArea: "partners",
+  });
+  const changed = await store.updateGoalById(goal.id, {
+    title: "Eliminate partner settlement failures",
+    detail: marker,
+    targetOn: null,
+    priority: "high",
+    goalArea: "banking",
+  });
+  assert.deepEqual(
+    [changed?.title, changed?.detail, changed?.targetOn, changed?.priority, changed?.goalArea],
+    ["Eliminate partner settlement failures", marker, null, "high", "banking"],
+  );
+  const db = await dbModule.getDb();
+  const raw = await db.query<any>("SELECT detail_enc FROM goals WHERE id = $1", [goal.id]);
+  assert.ok(!String(raw.rows[0].detail_enc).includes(marker));
+});
+
 test("fifteen task labels reuse five server validation families", () => {
   assert.equal(Object.keys(taskFramework.TASK_GROUPS).length, 5);
   assert.equal(Object.keys(taskFramework.TASK_TYPE_GROUP).length, 15);
@@ -137,10 +163,41 @@ test("timezone conversion respects daylight saving time", () => {
   assert.equal(time.zonedDateTimeToUtc("2026-01-15T09:00", "America/New_York"), "2026-01-15T14:00:00.000Z");
 });
 
+test("recurrence advances daily, weekly, monthly, and quarterly dates", () => {
+  assert.equal(recurrence.nextRecurrenceDate("2026-08-14", "daily"), "2026-08-15");
+  assert.equal(recurrence.nextRecurrenceDate("2026-08-14", "weekly"), "2026-08-21");
+  assert.equal(recurrence.nextRecurrenceDate("2027-01-31", "monthly"), "2027-02-28");
+  assert.equal(recurrence.nextRecurrenceDate("2027-02-28", "monthly", "2027-01-31"), "2027-03-31");
+  assert.equal(recurrence.nextRecurrenceDate("2026-11-30", "quarterly"), "2027-02-28");
+});
+
+test("completing a recurring task keeps history and creates its next occurrence", async () => {
+  const marker = `Monthly close ${crypto.randomBytes(4).toString("hex")}`;
+  const first = await store.addCommitment({
+    title: marker,
+    dueOn: "2027-01-31",
+    dueTime: "09:30",
+    recurrence: "monthly",
+    items: [{ title: "Prepare the monthly packet", dueOn: "2027-01-30" }],
+  });
+  const completed = await store.closeCommitmentById(first.id);
+  assert.equal(completed?.status, "done");
+  assert.equal(completed?.nextDueOn, "2027-02-28");
+  assert.equal((await store.commitmentDetail(first.id))?.status, "done");
+
+  const second = (await store.openCommitments()).find((item) => item.title === marker);
+  assert.deepEqual([second?.dueOn, second?.dueTime, second?.recurrence, second?.recurrenceAnchorOn],
+    ["2027-02-28", "09:30", "monthly", "2027-01-31"]);
+  assert.equal(second?.items[0]?.dueOn, "2027-02-28");
+  const completedSecond = await store.closeCommitmentById(second!.id);
+  assert.equal(completedSecond?.nextDueOn, "2027-03-31");
+  assert.equal((await store.openCommitments()).filter((item) => item.title === marker).length, 1);
+});
+
 test("calendar export includes events and dated commitments", () => {
   const ics = calendar.buildCalendarIcs(
     [{ id: 1, title: "State exam", startsAt: "2026-09-14T13:00:00.000Z", endsAt: null, allDay: false, location: "Austin", entityName: null, updatedAt: "2026-08-13T12:00:00.000Z", revision: 3 }],
-    [{ id: 2, title: "Submit evidence", detail: "", direction: "mine", taskType: "prepare", goalArea: "compliance", status: "open", dueOn: "2026-09-13", dueTime: "10:00", priority: "high", owner: "me", framework: {}, taskData: {}, waitingOn: "", nextAction: "Upload evidence", entityId: null, entityName: null, entryId: null, createdAt: "2026-08-13T12:00:00.000Z", updatedAt: "2026-08-13T13:00:00.000Z", revision: 2, completedAt: null, items: [] }],
+    [{ id: 2, title: "Submit evidence", detail: "", direction: "mine", taskType: "prepare", goalArea: "compliance", status: "open", dueOn: "2026-09-13", dueTime: "10:00", recurrence: "none", recurrenceAnchorOn: null, priority: "high", owner: "me", framework: {}, taskData: {}, waitingOn: "", nextAction: "Upload evidence", entityId: null, entityName: null, entryId: null, createdAt: "2026-08-13T12:00:00.000Z", updatedAt: "2026-08-13T13:00:00.000Z", revision: 2, completedAt: null, items: [] }],
   );
   assert.match(ics, /SUMMARY:State exam/);
   assert.match(ics, /SUMMARY:Submit evidence/);
@@ -172,9 +229,9 @@ test("semantic ranking accepts only valid Ledger record ids", () => {
 });
 
 test("transport detection distinguishes insecure public addresses", () => {
-  assert.equal(security.transportSecurity("http", "129.121.99.71:4321").warning, true);
+  assert.equal(security.transportSecurity("http", "203.0.113.10:4321").warning, true);
   assert.equal(security.transportSecurity("http", "ledger.example.com").warning, true);
-  assert.equal(security.transportSecurity("https", "129.121.99.71").warning, false);
+  assert.equal(security.transportSecurity("https", "203.0.113.10").warning, false);
   assert.equal(security.transportSecurity("http", "127.0.0.1:4321").warning, false);
   assert.equal(security.transportSecurity("http", "192.168.1.20").warning, false);
   assert.equal(security.transportSecurity("http", "172.20.1.4").warning, false);
