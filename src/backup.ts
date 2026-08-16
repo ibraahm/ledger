@@ -8,10 +8,11 @@ const MAGIC = Buffer.from("LEDGER-BACKUP-1\n", "utf8");
 const TABLES = [
   "schema_migrations", "entries", "entities", "entity_contacts", "messages", "commitments", "commitment_items",
   "goals", "events", "facts", "action_runs", "action_steps", "action_changes", "assistant_state", "assistant_rules",
+  "habit_checkins",
 ] as const;
-const OPTIONAL_LEGACY_TABLES = new Set<string>(["assistant_state", "assistant_rules", "entity_contacts"]);
+const OPTIONAL_LEGACY_TABLES = new Set<string>(["assistant_state", "assistant_rules", "entity_contacts", "habit_checkins"]);
 const DELETE_ORDER = [
-  "assistant_rules", "assistant_state", "action_changes", "action_steps", "action_runs", "commitment_items", "facts", "events", "entity_contacts",
+  "habit_checkins", "assistant_rules", "assistant_state", "action_changes", "action_steps", "action_runs", "commitment_items", "facts", "events", "entity_contacts",
   "goals", "commitments", "messages", "entities", "entries", "schema_migrations",
 ] as const;
 const FILE_PATTERN = /^ledger-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.lgr$/;

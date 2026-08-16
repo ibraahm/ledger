@@ -24,6 +24,7 @@
           <button class="is-on" type="button" data-area-target="capture" aria-current="page">Assistant</button>
           <button type="button" data-area-target="memory">Memory</button>
           <button type="button" data-area-target="feed">Feed</button>
+          <button type="button" data-area-target="habits">Habits</button>
         </nav>
         <div class="bar__actions">
           <span class="bar__meta" id="meta" aria-live="polite">Connecting</span>
@@ -142,6 +143,21 @@
             <button class="tab" data-view="goals" role="tab" aria-selected="false">Goals</button>
           </nav>
           <div class="agenda" id="agenda"></div>
+        </section>
+
+        <section class="workspace__view habits-view" id="habitsView" data-area="habits" aria-labelledby="habitsTitle" hidden>
+          <header class="view-head view-head--habits">
+            <p>Identity through repetition</p>
+            <h2 id="habitsTitle">Habit &amp; discipline tracker</h2>
+            <span>Build the system, record the evidence, and never miss twice.</span>
+          </header>
+          <nav class="tabs habit-tabs" role="tablist" aria-label="Habit tracker views">
+            <button class="tab is-on" data-habit-view="today" role="tab" aria-selected="true">Today</button>
+            <button class="tab" data-habit-view="month" role="tab" aria-selected="false">Month</button>
+            <button class="tab" data-habit-view="weekly" role="tab" aria-selected="false">Weekly</button>
+            <button class="tab" data-habit-view="playbook" role="tab" aria-selected="false">Playbook</button>
+          </nav>
+          <div class="habit-workspace" id="habitWorkspace" aria-live="polite"></div>
         </section>
       </main>
     </div>

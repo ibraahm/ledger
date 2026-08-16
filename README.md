@@ -4,11 +4,27 @@ Encrypted private memory for one person. Dump personal or professional thoughts 
 
 Built to help you remember, learn, grow, follow through, and keep work and life connected without forcing you to organize every thought first.
 
+## What Ledger does
+
+- Captures every note verbatim before using a model to turn it into connected memory, tasks, goals, events, and relationships.
+- Keeps sensitive text encrypted at rest with AES-256-GCM and supports encrypted, portable backups.
+- Provides an action-oriented assistant that can safely create, update, complete, archive, and undo work.
+- Combines dated commitments and events in month and day views, with a private Apple Calendar subscription.
+- Tracks daily and weekly habits with KPI inputs, monthly consistency, and a four-law behavior playbook.
+- Surfaces overdue work, blocked tasks, repeated workstreams, and relationships that have gone quiet.
+- Runs on embedded PGlite by default, with PostgreSQL available through `DATABASE_URL`.
+
 ## People and relationships
 
 Memory → People is a stakeholder ledger built from Ledger's existing person, organization, partner, and agent records. It sorts people who have never been contacted first, then the oldest contact, so neglected relationships are visible without a separate database. Open a stakeholder to log a call, email, meeting, message, or text; contact notes are encrypted and included in encrypted backups. You can also tell chat, “I called Dana and she approved the filing,” to add the completed interaction.
 
-## Setup
+## Requirements
+
+- Node.js 20 or newer
+- npm
+- An Ollama Cloud API key, or access to another Ollama-compatible host and model
+
+## Quick start
 
 ```bash
 npm install
@@ -16,7 +32,22 @@ npm run init      # generates keys, sets your password
 npm run dev       # http://localhost:4321
 ```
 
-`npm run init` writes `.env` with a `MASTER_KEY`. **Back that key up somewhere safe.** It decrypts everything and there is no recovery path. Lose it and the data is unreadable, by design.
+Open `http://localhost:4321` and sign in with the password chosen during initialization.
+
+`npm run init` writes `.env` with a `MASTER_KEY`. **Back that key up somewhere safe.** It decrypts everything and there is no recovery path. Lose it and the data is unreadable, by design. Running initialization again against an existing installation can replace the key and make its encrypted data unreadable.
+
+The initializer defaults to Ollama Cloud. To use another Ollama-compatible service, update `OLLAMA_HOST`, `OLLAMA_MODEL`, and, when required, `OLLAMA_API_KEY` in `.env`. Model, prayer-time, vault, backup, password, and security controls are also available in **Settings** after sign-in.
+
+## Commands
+
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Run the TypeScript server in watch mode |
+| `npm run build` | Compile the application to `dist/` |
+| `npm start` | Build and run the compiled server |
+| `npm test` | Run the isolated test suite |
+| `npm run export` | Write a decrypted Obsidian-compatible Markdown export |
+| `npm run reset-password` | Reset the login password and invalidate existing sessions |
 
 ## Production with PM2
 
@@ -167,6 +198,17 @@ The subscription address contains a 256-bit secret. Anyone with that address can
 
 **Dependencies stay visible.** Every task has `waiting_on` and `next_action`. "Maya said she'd send the reading list Friday" records Maya in `waiting_on`, while the next action can remain blank until a follow-up is needed; the Waiting on feed surfaces blocked work without duplicating it as another task.
 
+## Habits
+
+The **Habits** workspace has four menus:
+
+- **Today** records 12 daily non-negotiables and seven measurable KPIs, including prayer, Qur’an, deep work, steps, reading, social media, and screen time.
+- **Month** shows daily completion at a glance and opens any day for review or backfilling.
+- **Weekly** combines seven-day consistency, deep-work and screen-time summaries, and eight weekly commitments.
+- **Playbook** keeps the four laws of behavior change, their inversions, environment rules, identity reminders, and quick-reference resources close to the tracker.
+
+Habit check-ins are stored by date, included in encrypted `.lgr` backups, and work for any month; August 2026 is the starting plan rather than a hard-coded limit.
+
 ## What one dump produces
 
 > Goal: finish the leadership course by December. Task: register this week. I learned that I focus better when I plan tomorrow before ending work. Dinner with Maya Thursday at 7.
@@ -248,18 +290,28 @@ Every note is sent to the configured Ollama host for structuring. When using Oll
 
 ```
 src/
-  server.ts   routes + auth gate
-  agent.ts    system prompt + tool loop
-  actions.ts  transactional action audit + undo
-  backup.ts   encrypted logical backup + restore
-  semantic.ts hybrid exact + related Memory retrieval
-  tools.ts    tool schemas and handlers
-  store.ts    all data access; the encryption boundary
-  db.ts       PGlite/Postgres adapter + numbered migrations
-  crypto.ts   AES-GCM, scrypt, sessions
-  init.ts     first-run setup
-  export.ts   Obsidian mirror
-public/       login + mobile-first chat and agenda
+  server.ts          HTTP routes, authentication gate, and schedulers
+  agent.ts           assistant prompt, context assembly, and tool loop
+  tools.ts           assistant tool schemas and handlers
+  actions.ts         transactional action audit and undo
+  store.ts           data access and the encryption boundary
+  db.ts              PGlite/PostgreSQL adapter and numbered migrations
+  crypto.ts          AES-GCM encryption, scrypt passwords, and sessions
+  semantic.ts        exact and model-ranked related-memory retrieval
+  task-framework.ts  Goal Areas, Task Types, and structured task details
+  habits.ts          habit catalog, metrics, four laws, and behavior rules
+  calendar.ts        iCalendar generation
+  backup.ts          encrypted logical backup and restore
+  prayer.ts          live prayer-time lookup and daily cache
+  ollama.ts          model client, retry, timeout, and cancellation logic
+  config.ts          environment and writable settings
+  vault.ts           optional Markdown vault integration
+  init.ts            first-run setup
+  reset-password.ts  password reset and session-secret rotation
+  export.ts          Obsidian-compatible Markdown export
+public/              login and mobile-first chat, memory, feed, and calendar UI
+scripts/             production HTTPS setup
+tests/               integration and behavior tests
 ```
 
 ## Security posture

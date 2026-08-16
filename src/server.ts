@@ -29,6 +29,7 @@ import {
   taskFrameworkCatalog,
 } from "./task-framework.js";
 import { RECURRENCE_FREQUENCIES, normalizeRecurrence } from "./recurrence.js";
+import { HABIT_KEYS, habitCatalog } from "./habits.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.resolve(here, "../public");
@@ -134,6 +135,12 @@ function validCalendarFeedToken(value: string): boolean {
   const expected = config.calendarFeedToken;
   if (!/^[a-f0-9]{64}$/.test(value) || !/^[a-f0-9]{64}$/.test(expected)) return false;
   return crypto.timingSafeEqual(Buffer.from(value), Buffer.from(expected));
+}
+
+function validIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
 async function sendCalendar(_req: Request, res: Response): Promise<void> {
@@ -415,6 +422,35 @@ async function main() {
 
   app.get("/api/review", authed, async (_req, res) => {
     res.json(await store.weeklyReview());
+  });
+
+  app.get("/api/habits", authed, async (req, res) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const from = String(req.query.from || today);
+    const to = String(req.query.to || from);
+    const span = new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime();
+    if (!validIsoDate(from) || !validIsoDate(to) || from > to || span > 370 * 86400_000) {
+      return res.status(400).json({ error: "Enter a valid habit date range of one year or less." });
+    }
+    res.json({ catalog: habitCatalog(), checkins: await store.habitCheckins(from, to) });
+  });
+
+  app.put("/api/habits/:key", authed, async (req, res) => {
+    const habitKey = String(req.params.key || "");
+    const periodOn = String(req.body?.periodOn || "");
+    const rawValue = req.body?.value;
+    const value = rawValue === undefined || rawValue === null || rawValue === "" ? null : Number(rawValue);
+    if (!HABIT_KEYS.has(habitKey)) return res.status(404).json({ error: "Habit not found." });
+    if (!validIsoDate(periodOn)) return res.status(400).json({ error: "Use a valid habit date." });
+    if (value !== null && (!Number.isFinite(value) || value < 0 || value > 1_000_000)) {
+      return res.status(400).json({ error: "Enter a valid non-negative habit value." });
+    }
+    res.json(await store.saveHabitCheckin({
+      habitKey,
+      periodOn,
+      completed: req.body?.completed === true,
+      value,
+    }));
   });
 
   app.get("/api/memory/search", authed, async (req, res) => {

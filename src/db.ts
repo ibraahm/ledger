@@ -341,6 +341,22 @@ CREATE TABLE IF NOT EXISTS entity_contacts (
 );
 CREATE INDEX IF NOT EXISTS entity_contacts_entity ON entity_contacts (entity_id, contacted_at DESC);`,
   },
+  {
+    version: 12,
+    name: "daily and weekly habit check-ins",
+    sql: `
+CREATE TABLE IF NOT EXISTS habit_checkins (
+  id BIGSERIAL PRIMARY KEY,
+  habit_key TEXT NOT NULL,
+  period_on DATE NOT NULL,
+  completed BOOLEAN NOT NULL DEFAULT FALSE,
+  value NUMERIC,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (habit_key, period_on)
+);
+CREATE INDEX IF NOT EXISTS habit_checkins_period ON habit_checkins (period_on, habit_key);`,
+  },
 ];
 
 async function migrate(target: RootDb): Promise<void> {

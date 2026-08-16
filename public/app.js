@@ -100,6 +100,7 @@ const prayerStatus = document.getElementById("prayerStatus");
 const prayerError = document.getElementById("prayerError");
 const refreshPrayerTimesButton = document.getElementById("refreshPrayerTimes");
 const savePrayerSettingsButton = document.getElementById("savePrayerSettings");
+const habitWorkspace = document.getElementById("habitWorkspace");
 
 let view = "overview";
 let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -115,6 +116,11 @@ let taskFrameworkCatalogData = null;
 let currentTaskFramework = {};
 let slashMenuOpen = false;
 let slashSelection = 0;
+let habitView = "today";
+let habitDate = "";
+let habitCatalogData = null;
+let habitCheckins = new Map();
+let habitsLoaded = false;
 
 const GOAL_AREA_OPTIONS = [
   "company", "digital", "compliance", "agents", "partners", "banking", "growth", "team",
@@ -184,6 +190,7 @@ const pad = (number) => String(number).padStart(2, "0");
 const isoOf = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 const todayISO = () => isoOf(new Date());
 selectedCalendarDate = todayISO();
+habitDate = todayISO();
 
 function dayLabel(iso) {
   const today = todayISO();
@@ -646,6 +653,7 @@ function setArea(name, updateHash = true) {
   if (updateHash) history.replaceState(null, "", `#${name}`);
   if (name === "memory" && !memoryLoaded) loadMemory();
   if (name === "feed") refresh();
+  if (name === "habits") loadHabits();
   if (name === "capture") requestAnimationFrame(() => input.focus());
 }
 
@@ -2310,6 +2318,452 @@ async function refresh() {
   } finally {
     if (requestId === refreshRequest) agendaEl.removeAttribute("aria-busy");
   }
+}
+
+function habitMapKey(key, date) {
+  return `${date}:${key}`;
+}
+
+function addDays(iso, days) {
+  const date = new Date(`${iso}T12:00:00`);
+  date.setDate(date.getDate() + days);
+  return isoOf(date);
+}
+
+function startOfWeek(iso) {
+  const date = new Date(`${iso}T12:00:00`);
+  const offset = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - offset);
+  return isoOf(date);
+}
+
+function habitLoadBounds(iso) {
+  const selected = new Date(`${iso}T12:00:00`);
+  const first = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  const from = new Date(first);
+  from.setDate(from.getDate() - from.getDay() - 7);
+  const to = new Date(first.getFullYear(), first.getMonth() + 1, 0, 12);
+  to.setDate(to.getDate() + (6 - to.getDay()) + 7);
+  return { from: isoOf(from), to: isoOf(to) };
+}
+
+function habitCheckin(key, date) {
+  return habitCheckins.get(habitMapKey(key, date));
+}
+
+function habitDateLabel(iso, options = {}) {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: options.weekday || "long",
+    month: options.month || "long",
+    day: "numeric",
+    year: options.year === false ? undefined : "numeric",
+  });
+}
+
+function habitPeriodControls(kind) {
+  const controls = el("div", "habit-period");
+  const previous = el("button", "habit-period__move", "Previous");
+  previous.type = "button";
+  previous.setAttribute("aria-label", `Previous ${kind}`);
+  const label = el("strong", "habit-period__label");
+  const current = el("button", "habit-period__current", "Today");
+  current.type = "button";
+  const next = el("button", "habit-period__move", "Next");
+  next.type = "button";
+  next.setAttribute("aria-label", `Next ${kind}`);
+
+  if (kind === "month") {
+    label.textContent = new Date(`${habitDate.slice(0, 7)}-01T12:00:00`).toLocaleDateString(undefined, {
+      month: "long",
+      year: "numeric",
+    });
+  } else if (kind === "week") {
+    const from = startOfWeek(habitDate);
+    label.textContent = `${habitDateLabel(from, { weekday: "short", year: false })} – ${habitDateLabel(addDays(from, 6), { weekday: "short" })}`;
+  } else {
+    label.textContent = habitDateLabel(habitDate);
+  }
+
+  previous.addEventListener("click", () => changeHabitPeriod(kind, -1));
+  next.addEventListener("click", () => changeHabitPeriod(kind, 1));
+  current.addEventListener("click", () => {
+    habitDate = todayISO();
+    loadHabits(true);
+  });
+  controls.append(previous, label, current, next);
+  return controls;
+}
+
+function changeHabitPeriod(kind, direction) {
+  const selected = new Date(`${habitDate}T12:00:00`);
+  if (kind === "month") selected.setMonth(selected.getMonth() + direction, 1);
+  else selected.setDate(selected.getDate() + direction * (kind === "week" ? 7 : 1));
+  habitDate = isoOf(selected);
+  loadHabits(true);
+}
+
+function progressBar(completed, total, label) {
+  const percent = total ? Math.round((completed / total) * 100) : 0;
+  const wrap = el("div", "habit-progress");
+  const copy = el("div", "habit-progress__copy");
+  copy.append(el("strong", null, `${percent}%`), el("span", null, label || `${completed} of ${total} complete`));
+  const track = el("div", "habit-progress__track");
+  const fill = el("span", "habit-progress__fill");
+  fill.style.width = `${percent}%`;
+  track.append(fill);
+  wrap.append(copy, track);
+  return wrap;
+}
+
+async function saveHabitCheckin(key, date, update, control) {
+  if (control) control.disabled = true;
+  try {
+    const existing = habitCheckin(key, date);
+    const response = await fetch(`/api/habits/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        periodOn: date,
+        completed: update.completed ?? existing?.completed ?? false,
+        value: update.value !== undefined ? update.value : existing?.value ?? null,
+      }),
+    });
+    if (response.status === 401) return (location.href = "/");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not save the habit check-in.");
+    habitCheckins.set(habitMapKey(data.habitKey, data.periodOn), data);
+    renderHabits();
+  } catch (error) {
+    showBanner(error.message, "error");
+    if (control) control.disabled = false;
+  }
+}
+
+function renderHabitChecklist(definitions, date, className = "") {
+  const list = el("div", `habit-checklist ${className}`.trim());
+  for (const habit of definitions) {
+    const saved = habitCheckin(habit.key, date);
+    const label = el("label", `habit-check${saved?.completed ? " is-done" : ""}`);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(saved?.completed);
+    checkbox.addEventListener("change", () => saveHabitCheckin(habit.key, date, { completed: checkbox.checked }, checkbox));
+    const mark = el("span", "habit-check__mark");
+    const copy = el("span", "habit-check__copy");
+    copy.append(el("strong", null, habit.title));
+    if (habit.cue) copy.append(el("small", null, habit.cue));
+    label.append(checkbox, mark, copy);
+    list.append(label);
+  }
+  return list;
+}
+
+function metricTargetLabel(metric) {
+  if (metric.direction === "under") return `< ${metric.target} ${metric.unit}`;
+  if (metric.direction === "at_most") return `≤ ${metric.target} ${metric.unit}`;
+  return `≥ ${metric.target.toLocaleString()} ${metric.unit}`;
+}
+
+function metricMet(metric, value) {
+  if (value === null || value === undefined) return false;
+  if (metric.direction === "under") return value < metric.target;
+  if (metric.direction === "at_most") return value <= metric.target;
+  return value >= metric.target;
+}
+
+function renderHabitMetrics(date) {
+  const grid = el("div", "habit-metrics");
+  for (const metric of habitCatalogData.metrics) {
+    const saved = habitCheckin(metric.key, date);
+    const met = metricMet(metric, saved?.value);
+    const card = el("label", `habit-metric${met ? " is-met" : ""}`);
+    const heading = el("span", "habit-metric__head");
+    heading.append(el("strong", null, metric.title), el("small", null, metricTargetLabel(metric)));
+    const field = el("span", "habit-metric__field");
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "1000000";
+    input.step = String(metric.step);
+    input.inputMode = "decimal";
+    input.value = saved?.value ?? "";
+    input.placeholder = "—";
+    input.addEventListener("change", () => {
+      const value = input.value === "" ? null : Number(input.value);
+      saveHabitCheckin(metric.key, date, { value }, input);
+    });
+    field.append(input, el("span", null, metric.unit));
+    card.append(heading, field);
+    grid.append(card);
+  }
+  return grid;
+}
+
+function renderHabitLawStrip() {
+  const strip = el("div", "habit-law-strip");
+  for (const law of habitCatalogData.laws) {
+    const item = el("div", "habit-law-chip");
+    item.append(el("span", null, `0${law.number}`), el("strong", null, law.make.replace(/^Make it /i, "")));
+    strip.append(item);
+  }
+  return strip;
+}
+
+function renderHabitToday() {
+  const fragment = document.createDocumentFragment();
+  fragment.append(habitPeriodControls("day"));
+  const completed = habitCatalogData.daily.filter((habit) => habitCheckin(habit.key, habitDate)?.completed).length;
+  const hero = el("section", "habit-today-hero");
+  const heroCopy = el("div", "habit-today-hero__copy");
+  heroCopy.append(
+    el("p", null, habitDate === todayISO() ? "Today’s evidence" : "Daily evidence"),
+    el("h3", null, completed === habitCatalogData.daily.length ? "The system held." : "Cast the next vote."),
+    el("span", null, "Small wins are evidence for the person you are becoming."),
+  );
+  hero.append(heroCopy, progressBar(completed, habitCatalogData.daily.length));
+  fragment.append(hero, renderHabitLawStrip());
+
+  const layout = el("div", "habit-today-layout");
+  const checklist = el("section", "habit-panel");
+  const checklistHead = el("header", "habit-panel__head");
+  checklistHead.append(el("div", null), el("span", null, `${completed}/${habitCatalogData.daily.length}`));
+  checklistHead.firstChild.append(el("p", null, "Daily non-negotiables"), el("h3", null, "Show up for the system"));
+  checklist.append(checklistHead, renderHabitChecklist(habitCatalogData.daily, habitDate));
+
+  const metrics = el("section", "habit-panel");
+  const metricsHead = el("header", "habit-panel__head");
+  metricsHead.append(el("div", null));
+  metricsHead.firstChild.append(el("p", null, "Daily KPIs"), el("h3", null, "Record what actually happened"));
+  metrics.append(metricsHead, renderHabitMetrics(habitDate));
+  const note = el("p", "habit-data-note", "A missed box is data, not a verdict. Reset the environment and protect the next repetition.");
+  metrics.append(note);
+  layout.append(checklist, metrics);
+  fragment.append(layout);
+  return fragment;
+}
+
+function renderHabitMonth() {
+  const fragment = document.createDocumentFragment();
+  fragment.append(habitPeriodControls("month"));
+  const selected = new Date(`${habitDate}T12:00:00`);
+  const first = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  const gridStart = new Date(first);
+  gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+  const grid = el("section", "habit-month");
+  for (const weekday of ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) grid.append(el("div", "habit-month__weekday", weekday));
+  for (let offset = 0; offset < 42; offset += 1) {
+    const date = new Date(gridStart);
+    date.setDate(date.getDate() + offset);
+    const iso = isoOf(date);
+    const completed = habitCatalogData.daily.filter((habit) => habitCheckin(habit.key, iso)?.completed).length;
+    const percent = Math.round((completed / habitCatalogData.daily.length) * 100);
+    const button = el("button", "habit-day-cell");
+    button.type = "button";
+    if (date.getMonth() !== first.getMonth()) button.classList.add("is-outside");
+    if (iso === todayISO()) button.classList.add("is-today");
+    if (completed === habitCatalogData.daily.length) button.classList.add("is-complete");
+    const top = el("span", "habit-day-cell__top");
+    top.append(el("strong", null, String(date.getDate())), el("small", null, completed ? `${completed}/12` : "—"));
+    const track = el("span", "habit-day-cell__track");
+    const fill = el("span");
+    fill.style.width = `${percent}%`;
+    track.append(fill);
+    button.append(top, track);
+    button.setAttribute("aria-label", `${habitDateLabel(iso)}, ${completed} of 12 habits complete`);
+    button.addEventListener("click", () => {
+      habitDate = iso;
+      habitView = "today";
+      syncHabitTabs();
+      loadHabits(true);
+    });
+    grid.append(button);
+  }
+  const legend = el("div", "habit-month-legend");
+  legend.append(el("span", null, "Each bar shows daily non-negotiables completed."), el("strong", null, "Aim for consistency, not a perfect streak."));
+  fragment.append(grid, legend);
+  return fragment;
+}
+
+function weekDailyStats(weekStart) {
+  return Array.from({ length: 7 }, (_, offset) => {
+    const date = addDays(weekStart, offset);
+    return {
+      date,
+      completed: habitCatalogData.daily.filter((habit) => habitCheckin(habit.key, date)?.completed).length,
+    };
+  });
+}
+
+function sumMetric(key, days) {
+  return days.reduce((sum, day) => sum + (habitCheckin(key, day.date)?.value || 0), 0);
+}
+
+function averageMetric(key, days) {
+  const values = days.map((day) => habitCheckin(key, day.date)?.value).filter((value) => value !== null && value !== undefined);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+function renderHabitWeekly() {
+  const fragment = document.createDocumentFragment();
+  fragment.append(habitPeriodControls("week"));
+  const weekStart = startOfWeek(habitDate);
+  const days = weekDailyStats(weekStart);
+  const weeklyDone = habitCatalogData.weekly.filter((habit) => habitCheckin(habit.key, weekStart)?.completed).length;
+  const daysTracked = days.filter((day) => day.completed > 0 || habitCatalogData.metrics.some((metric) => habitCheckin(metric.key, day.date)?.value !== null && habitCheckin(metric.key, day.date)?.value !== undefined)).length;
+  const screenAverage = averageMetric("metric_screen_time", days);
+  const summary = el("section", "habit-week-summary");
+  for (const [value, label] of [
+    [`${daysTracked}/7`, "days tracked"],
+    [`${sumMetric("metric_learning", days).toFixed(1)}h`, "deep work"],
+    [screenAverage === null ? "—" : `${screenAverage.toFixed(1)}h`, "avg. screen time"],
+    [`${weeklyDone}/${habitCatalogData.weekly.length}`, "weekly commitments"],
+  ]) {
+    const stat = el("div", "habit-week-stat");
+    stat.append(el("strong", null, value), el("span", null, label));
+    summary.append(stat);
+  }
+
+  const consistency = el("section", "habit-panel habit-week-consistency");
+  const consistencyHead = el("header", "habit-panel__head");
+  consistencyHead.append(el("div", null));
+  consistencyHead.firstChild.append(el("p", null, "Daily consistency"), el("h3", null, "Seven days of evidence"));
+  consistency.append(consistencyHead);
+  const bars = el("div", "habit-week-bars");
+  for (const day of days) {
+    const column = el("button", `habit-week-day${day.date === todayISO() ? " is-today" : ""}`);
+    column.type = "button";
+    const bar = el("span", "habit-week-day__bar");
+    const fill = el("span");
+    fill.style.height = `${Math.round((day.completed / habitCatalogData.daily.length) * 100)}%`;
+    bar.append(fill);
+    column.append(el("strong", null, `${day.completed}`), bar, el("small", null, new Date(`${day.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" })));
+    column.addEventListener("click", () => {
+      habitDate = day.date;
+      habitView = "today";
+      syncHabitTabs();
+      renderHabits();
+    });
+    bars.append(column);
+  }
+  consistency.append(bars);
+
+  const checklist = el("section", "habit-panel habit-week-checklist");
+  const checklistHead = el("header", "habit-panel__head");
+  checklistHead.append(el("div", null), el("span", null, `${weeklyDone}/${habitCatalogData.weekly.length}`));
+  checklistHead.firstChild.append(el("p", null, "Weekly non-negotiables"), el("h3", null, "Close the week deliberately"));
+  checklist.append(checklistHead, renderHabitChecklist(habitCatalogData.weekly, weekStart, "habit-checklist--weekly"));
+
+  const rule = el("aside", "habit-rule-above-all");
+  rule.append(el("span", null, "One rule above all"), el("strong", null, "Do not renegotiate a rule when temptation appears."), el("p", null, "Change the rule during the weekly review—not during the weakness."));
+  fragment.append(summary, consistency, checklist, rule);
+  return fragment;
+}
+
+function renderRuleList(title, subtitle, rules) {
+  const panel = el("section", "habit-rules-panel");
+  panel.append(el("p", null, subtitle), el("h3", null, title));
+  const list = document.createElement("ol");
+  for (const rule of rules) list.append(el("li", null, rule));
+  panel.append(list);
+  return panel;
+}
+
+function renderHabitPlaybook() {
+  const fragment = document.createDocumentFragment();
+  const intro = el("section", "habit-playbook-intro");
+  intro.append(el("p", null, "The four laws"), el("h3", null, "Change the system around the behavior."), el("span", null, "Build good habits with the law. Break bad habits with its inversion."));
+  fragment.append(intro);
+
+  const laws = el("div", "habit-law-grid");
+  for (const law of habitCatalogData.laws) {
+    const card = el("article", "habit-law-card");
+    const head = el("header", "habit-law-card__head");
+    head.append(el("span", null, `Law 0${law.number}`), el("h3", null, law.make), el("strong", null, `Inverse · ${law.inverse}`));
+    const columns = el("div", "habit-law-card__columns");
+    for (const [label, steps] of [["Build", law.build], ["Break", law.break]]) {
+      const column = el("div", null);
+      column.append(el("p", null, label));
+      const list = document.createElement("ul");
+      for (const step of steps) list.append(el("li", null, step));
+      column.append(list);
+      columns.append(column);
+    }
+    card.append(head, columns);
+    laws.append(card);
+  }
+  fragment.append(laws);
+
+  const rules = el("div", "habit-rules-grid");
+  rules.append(
+    renderRuleList("Social media", "Make distraction difficult", habitCatalogData.socialMediaRules),
+    renderRuleList("Deep work", "Make focus obvious", habitCatalogData.deepWorkRules),
+  );
+  fragment.append(rules);
+
+  const closing = el("div", "habit-playbook-closing");
+  const insights = el("section", "habit-insights");
+  insights.append(el("p", null, "Identity & systems"), el("h3", null, "Useful reminders"));
+  for (const insight of habitCatalogData.insights) insights.append(el("blockquote", null, insight));
+  const resources = el("section", "habit-resources");
+  resources.append(el("p", null, "Quick lookup"), el("h3", null, "Atomic Habits resources"));
+  for (const resource of habitCatalogData.resources) {
+    const link = el("a", null, resource.label);
+    link.href = resource.url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    resources.append(link);
+  }
+  closing.append(insights, resources);
+  fragment.append(closing);
+  return fragment;
+}
+
+function syncHabitTabs() {
+  for (const button of document.querySelectorAll("[data-habit-view]")) {
+    const selected = button.dataset.habitView === habitView;
+    button.classList.toggle("is-on", selected);
+    button.setAttribute("aria-selected", String(selected));
+  }
+}
+
+function renderHabits() {
+  if (!habitWorkspace || !habitCatalogData) return;
+  habitWorkspace.textContent = "";
+  habitWorkspace.removeAttribute("aria-busy");
+  if (habitView === "month") habitWorkspace.append(renderHabitMonth());
+  else if (habitView === "weekly") habitWorkspace.append(renderHabitWeekly());
+  else if (habitView === "playbook") habitWorkspace.append(renderHabitPlaybook());
+  else habitWorkspace.append(renderHabitToday());
+}
+
+async function loadHabits(force = false) {
+  if (!habitWorkspace || (habitsLoaded && !force)) return renderHabits();
+  const { from, to } = habitLoadBounds(habitDate);
+  habitWorkspace.setAttribute("aria-busy", "true");
+  if (!habitWorkspace.children.length) habitWorkspace.append(el("p", "clear", "Loading habit tracker…"));
+  try {
+    const response = await fetch(`/api/habits?from=${from}&to=${to}`);
+    if (response.status === 401) return (location.href = "/");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Could not load the habit tracker.");
+    habitCatalogData = data.catalog;
+    habitCheckins = new Map(data.checkins.map((checkin) => [habitMapKey(checkin.habitKey, checkin.periodOn), checkin]));
+    habitsLoaded = true;
+    renderHabits();
+  } catch (error) {
+    habitWorkspace.textContent = "";
+    habitWorkspace.removeAttribute("aria-busy");
+    habitWorkspace.append(el("p", "clear clear--error", error.message));
+  }
+}
+
+for (const button of document.querySelectorAll("[data-habit-view]")) {
+  button.addEventListener("click", () => {
+    habitView = button.dataset.habitView;
+    syncHabitTabs();
+    if (habitCatalogData) renderHabits();
+    else loadHabits();
+  });
 }
 
 async function boot() {

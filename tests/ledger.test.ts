@@ -26,6 +26,7 @@ const ledgerTools = await import("../src/tools.js");
 const taskFramework = await import("../src/task-framework.js");
 const recurrence = await import("../src/recurrence.js");
 const agent = await import("../src/agent.js");
+const habits = await import("../src/habits.js");
 
 after(async () => {
   const db = await dbModule.getDb();
@@ -36,10 +37,27 @@ after(async () => {
 test("versioned migrations run once and include current schema", async () => {
   const db = await dbModule.getDb();
   const first = await db.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  assert.deepEqual(first.rows.map((row) => Number(row.version)), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   await dbModule.getDb();
   const second = await db.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM schema_migrations");
-  assert.equal(Number(second.rows[0].count), 11);
+  assert.equal(Number(second.rows[0].count), 12);
+});
+
+test("habit catalog exposes four laws and check-ins persist by date", async () => {
+  const catalog = habits.habitCatalog();
+  assert.equal(catalog.laws.length, 4);
+  assert.equal(catalog.daily.length, 12);
+  assert.equal(catalog.weekly.length, 8);
+  assert.ok(habits.HABIT_KEYS.has("daily_fajr"));
+
+  await store.saveHabitCheckin({ habitKey: "daily_fajr", periodOn: "2026-08-16", completed: true });
+  await store.saveHabitCheckin({ habitKey: "metric_steps", periodOn: "2026-08-16", value: 10425 });
+  await store.saveHabitCheckin({ habitKey: "metric_steps", periodOn: "2026-08-16", value: 11000 });
+  const checkins = await store.habitCheckins("2026-08-16", "2026-08-16");
+  const fajr = checkins.find((item) => item.habitKey === "daily_fajr");
+  const steps = checkins.find((item) => item.habitKey === "metric_steps");
+  assert.equal(fajr?.completed, true);
+  assert.equal(steps?.value, 11000);
 });
 
 test("chat routing exposes no more than six relevant tools", () => {

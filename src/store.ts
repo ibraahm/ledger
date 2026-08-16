@@ -1754,6 +1754,58 @@ export async function weeklyReview(): Promise<{
   };
 }
 
+/* ----------------------------------------------------------- habits */
+
+export interface HabitCheckin {
+  habitKey: string;
+  periodOn: string;
+  completed: boolean;
+  value: number | null;
+  updatedAt: string;
+}
+
+function toHabitCheckin(row: any): HabitCheckin {
+  const numericValue = row.value === null || row.value === undefined ? null : Number(row.value);
+  return {
+    habitKey: String(row.habit_key),
+    periodOn: isoDate(row.period_on) || "",
+    completed: Boolean(row.completed),
+    value: numericValue !== null && Number.isFinite(numericValue) ? numericValue : null,
+    updatedAt: isoStamp(row.updated_at),
+  };
+}
+
+export async function habitCheckins(fromDate: string, toDate: string): Promise<HabitCheckin[]> {
+  const db = await getDb();
+  const { rows } = await db.query(
+    `SELECT * FROM habit_checkins WHERE period_on BETWEEN $1 AND $2 ORDER BY period_on, habit_key`,
+    [fromDate, toDate],
+  );
+  return rows.map(toHabitCheckin);
+}
+
+export async function saveHabitCheckin(input: {
+  habitKey: string;
+  periodOn: string;
+  completed?: boolean;
+  value?: number | null;
+}): Promise<HabitCheckin> {
+  const db = await getDb();
+  const value = input.value === undefined || input.value === null ? null : Number(input.value);
+  if (value !== null && !Number.isFinite(value)) throw new Error("Habit value must be a number.");
+  const { rows } = await db.query(
+    `INSERT INTO habit_checkins (habit_key, period_on, completed, value)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (habit_key, period_on) DO UPDATE SET
+       completed = EXCLUDED.completed,
+       value = EXCLUDED.value,
+       updated_at = now()
+     RETURNING *`,
+    [input.habitKey, input.periodOn, Boolean(input.completed), value],
+  );
+  return toHabitCheckin(rows[0]);
+}
+
 /* ----------------------------------------------------------- search */
 
 export interface SearchHit {
